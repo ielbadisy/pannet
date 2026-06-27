@@ -1,0 +1,121 @@
+---
+title: "Introduction to pannet"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Introduction to pannet}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(comment = "#>")
+library(pannet)
+set.seed(1)
+```
+
+`pannet` fits neural panel regression models on top of the local `mlp`
+package. The wrapper adds panel-aware preprocessing, optional individual and
+time effects, and dynamic lag features.
+
+## Gaussian pooled model
+
+```{r}
+df <- data.frame(
+  id = rep(1:5, each = 4),
+  time = rep(1:4, times = 5),
+  x1 = rnorm(20),
+  x2 = runif(20),
+  y = rnorm(20)
+)
+
+fit <- pannet(
+  y ~ x1 + x2,
+  data = df,
+  id = id,
+  time = time,
+  family = "gaussian",
+  model = "pooled",
+  epochs = 1,
+  verbose = FALSE,
+  validation = 0.2
+)
+
+predict(fit, df)[1:3]
+```
+
+## Dynamic prediction
+
+Dynamic fits can use training history when predicting new periods for known
+units.
+
+```{r}
+fit_dyn <- pannet(
+  y ~ x1,
+  data = df,
+  id = id,
+  time = time,
+  family = "gaussian",
+  model = "dynamic",
+  lags = 1,
+  epochs = 1,
+  verbose = FALSE,
+  validation = 0.2
+)
+
+new_period <- data.frame(
+  id = c(1, 2),
+  time = c(5, 5),
+  x1 = rnorm(2)
+)
+
+predict(fit_dyn, new_period)
+```
+
+## Multiclass and fractional outputs
+
+```{r}
+df_multi <- data.frame(
+  id = rep(1:4, each = 5),
+  time = rep(1:5, times = 4),
+  x1 = rnorm(20),
+  x2 = runif(20),
+  y = factor(sample(letters[1:3], 20, TRUE))
+)
+
+fit_multi <- pannet(
+  y ~ x1 + x2,
+  data = df_multi,
+  id = id,
+  time = time,
+  family = "multiclass",
+  model = "pooled",
+  epochs = 1,
+  verbose = FALSE,
+  validation = 0.2
+)
+
+predict(fit_multi, df_multi, type = "prob")[1:3, ]
+```
+
+```{r}
+df_frac <- data.frame(
+  id = rep(1:4, each = 5),
+  time = rep(1:5, times = 4),
+  x1 = rnorm(20),
+  y = runif(20)
+)
+
+fit_frac <- pannet(
+  y ~ x1,
+  data = df_frac,
+  id = id,
+  time = time,
+  family = "fractional",
+  model = "pooled",
+  epochs = 1,
+  verbose = FALSE,
+  validation = 0.2
+)
+
+marginal_effects(fit_frac, "x1")
+```

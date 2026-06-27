@@ -1,0 +1,25 @@
+Package: pannet
+Type: Package
+Title: Neural Regression Models for Panel Data
+Version: 0.1.0
+Authors@R: person(given = "Imad", family = "El-Badisy", role = c("aut", "cre"), email = "elbadisyimad@gmail.com")
+Description: Implements neural regression models for panel and longitudinal data. The package provides
+    multilayer perceptron architectures with pooled, individual-effect, time-effect, two-way-effect,
+    and dynamic panel structures. Supported outcome families include Gaussian, binomial, Poisson,
+    multiclass, and fractional outcomes, estimated through panel-aware preprocessing and the local
+    mlp package.
+License: GPL-3
+Encoding: UTF-8
+LazyData: true
+Imports:
+    mlp,
+    stats,
+    utils
+Suggests:
+    knitr,
+    rmarkdown,
+    testthat (>= 3.0.0)
+VignetteBuilder: knitr
+Roxygen: list(markdown = TRUE)
+Config/testthat/edition: 3
+RoxygenNote: 7.3.3
