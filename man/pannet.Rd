@@ -35,7 +35,12 @@ pannet(
 )
 }
 \arguments{
-\item{formula}{A model formula such as \code{y ~ x1 + x2}.}
+\item{formula}{A model formula such as \code{y ~ x1 + x2}. May include an
+\code{offset()} term (e.g. \code{y ~ x1 + offset(log(exposure))}), added to the
+linear predictor after the MLP+embeddings, the standard \code{glm()}
+convention. Not supported with \code{family = "multiclass"}. \code{newdata}
+passed to \code{predict()} must supply the same offset variable(s) if the
+model was fit with one.}
 
 \item{data}{A data frame containing the panel.}
 
