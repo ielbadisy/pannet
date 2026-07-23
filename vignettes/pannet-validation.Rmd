@@ -1,0 +1,173 @@
+---
+title: "pannet: validation against classical estimators"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{pannet: validation against classical estimators}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE, comment = "#>",
+  eval = requireNamespace("panglm", quietly = TRUE) && requireNamespace("plm", quietly = TRUE)
+)
+```
+
+## Why this vignette exists
+
+`pannet_benchmark()` reports predictive performance, but predictive RMSE can
+look fine even when a model's *coefficients* are biased -- especially for a
+model whose whole point is capturing nonlinear effects, where "the right
+answer" isn't obvious from held-out error alone. This vignette checks
+`pannet` against classical estimators (`panglm`, `plm`) on realistic panel
+sizes: small N (~75), short T (6-8), sparse/zero-inflated counts, and a
+genuine dynamic-panel DGP -- and reports what it finds, including where
+`pannet` currently falls short, not just where it works.
+
+```{r setup}
+library(pannet)
+library(panglm)
+library(plm)
+```
+
+## 1. Small N, short T, linear DGP (the easy case)
+
+```{r linear-recovery}
+sim <- pannet_simulate(N = 75, T = 6, n_x = 2, dgp = "linear", family = "gaussian", seed = 1)
+d <- sim$data
+sim$true_beta
+
+f_pannet <- pannet(y ~ x1 + x2, data = d, id = id, time = time, family = "gaussian",
+                    model = "individual", epochs = 150, verbose = FALSE, seed = 1)
+f_panglm <- panglm(y ~ x1 + x2, data = d, index = c("id", "time"), model = "within", family = "gaussian")
+
+rbind(
+  pannet  = c(marginal_effects(f_pannet, "x1")$marginal_effect,
+              marginal_effects(f_pannet, "x2")$marginal_effect),
+  panglm  = coef(f_panglm)
+)
+```
+
+`panglm`'s exact within estimator recovers the true slopes closely (as it
+must -- it's a closed-form solution to the correctly-specified linear model).
+`pannet`'s marginal effects are in the right ballpark but noisier, which
+section 4 below shows is largely a seed-to-seed instability issue rather
+than a systematic bias for this DGP.
+
+## 2. Sparse, zero-inflated count panel
+
+A DGP where most units are structurally near-zero and a few are highly
+active -- the kind of panel that first surfaced a singular-Hessian crash in
+`panglm`'s random-effects Poisson fit (now fixed; see `panglm`'s `NEWS.md`).
+
+```{r sparse-count}
+set.seed(11)
+N <- 75; Tt <- 6
+dc <- data.frame(id = rep(1:N, each = Tt), time = rep(1:Tt, N))
+dc$x1 <- rnorm(nrow(dc))
+u <- rep(c(rep(-4, round(N * 0.85)), rep(1.5, N - round(N * 0.85))), each = Tt)
+true_beta <- 0.4
+dc$y <- rpois(nrow(dc), lambda = exp(-0.5 + true_beta * dc$x1 + u))
+cat("Fraction zero:", mean(dc$y == 0), "\n")
+
+f_pc <- pannet(y ~ x1, data = dc, id = id, time = time, family = "poisson",
+                model = "individual", epochs = 200, verbose = FALSE, seed = 1)
+f_gc <- panglm(y ~ x1, data = dc, index = c("id", "time"), model = "within", family = "poisson")
+
+cat("true beta:            ", true_beta, "\n")
+cat("panglm FE coef(x1):   ", coef(f_gc)["x1"], "\n")
+cat("pannet AME(x1):       ", marginal_effects(f_pc, "x1")$marginal_effect, "\n")
+```
+
+**Finding:** on this DGP, `panglm`'s exact conditional-MLE estimator recovers
+the true slope closely; `pannet`'s marginal effect is meaningfully biased
+downward (by roughly a third). This bias is **not** a network-capacity/
+overfitting artifact -- it persists essentially unchanged across
+`hidden = c(64,32)` (the default), `hidden = c(16,8)`, `hidden = c(16,8)` with
+dropout, and even `hidden = integer(0)` (a linear net, mathematically
+equivalent to a GLM backbone). The likely cause is incidental-parameters-type
+bias from jointly estimating one embedding per individual (75 of them) under
+heavy sparsity, rather than profiling the individual effect out in closed
+form the way `panglm`'s conditional MLE does. **Regularization is not the
+fix here** -- this is a structural property of the dummy-variable/embedding
+approach to fixed effects under sparsity, worth keeping in mind rather than
+tuning around.
+
+## 3. Dynamic panel
+
+```{r dynamic-panel}
+set.seed(5)
+N <- 75; Tt <- 8
+dd <- data.frame(id = rep(1:N, each = Tt), time = rep(1:Tt, N))
+a_i <- rep(rnorm(N, sd = 1), each = Tt)
+rho <- 0.6; beta_x <- 0.5
+dd$x1 <- rnorm(nrow(dd))
+y <- numeric(nrow(dd))
+for (i in seq_len(N)) {
+  idx <- which(dd$id == i)
+  y_prev <- 0
+  for (t in idx) {
+    y[t] <- rho * y_prev + beta_x * dd$x1[t] + a_i[t] + rnorm(1, sd = 0.5)
+    y_prev <- y[t]
+  }
+}
+dd$y <- y
+
+f_dyn <- pannet(y ~ x1, data = dd, id = id, time = time, family = "gaussian",
+                 model = "dynamic", lags = 1, epochs = 300, verbose = FALSE, seed = 1)
+cat("true beta_x:         ", beta_x, "  pannet AME(x1):    ", marginal_effects(f_dyn, "x1")$marginal_effect, "\n")
+cat("true rho (lag coef): ", rho,    "  pannet AME(lag1_y):", marginal_effects(f_dyn, "lag1_y")$marginal_effect, "\n")
+```
+
+**Finding:** the covariate slope (`x1`) recovers reasonably. The lagged-
+outcome coefficient is substantially overestimated. This matches the
+well-known **Nickell (1981) dynamic panel bias**: *any* fixed-effects
+estimator (not specific to `pannet`) is inconsistent for the lagged-dependent-
+variable coefficient when both individual effects and a lagged `y` are
+present with finite T -- correcting it requires a specialized estimator
+(Arellano-Bond-style GMM), which neither `pannet` nor `panglm` currently
+implements. Treat `pannet`'s dynamic-panel lag coefficients as unreliable
+until such a correction exists; the covariate slopes are comparatively more
+trustworthy.
+
+## 4. Seed stability
+
+```{r seed-stability}
+sim2 <- pannet_simulate(N = 75, T = 6, n_x = 2, dgp = "linear", family = "gaussian", seed = 1)
+d2 <- sim2$data
+true_x1 <- sim2$true_beta["x1"]
+
+ames <- sapply(1:5, function(s) {
+  f <- pannet(y ~ x1 + x2, data = d2, id = id, time = time, family = "gaussian",
+              model = "individual", epochs = 150, verbose = FALSE, seed = s)
+  marginal_effects(f, "x1")$marginal_effect
+})
+cat("true beta(x1):", true_x1, "\n")
+cat("AME(x1) across 5 seeds:", round(ames, 4), "\n")
+cat("range:", diff(range(ames)), "\n")
+```
+
+**Finding:** for a small true effect, seed-to-seed variability in the
+estimated marginal effect can be comparable to or larger than the true
+effect itself. **Don't trust a single-seed `pannet` fit for a marginal
+effect close to zero** -- refit across a few seeds (or use `pannet_simulate()`
+to check recovery on comparable synthetic data first) and treat the spread
+as part of the uncertainty, not just the reported point estimate.
+
+## Summary
+
+| Scenario | Recovers truth? |
+|---|---|
+| Small N/T, linear, gaussian | Roughly, with seed-dependent noise |
+| Sparse/zero-inflated count | No -- biased downward, not fixed by regularization |
+| Dynamic panel, covariate slope | Roughly |
+| Dynamic panel, lag coefficient | No -- Nickell bias, not `pannet`-specific |
+
+`pannet`'s comparative advantage is genuinely nonlinear covariate-response
+shapes (see the main introduction vignette and the package's own
+Monte Carlo simulation in the manuscript), not these edge cases. Where a
+classical closed-form estimator like `panglm` applies and the true effect is
+plausibly linear, prefer it -- it's both faster and, on this evidence, more
+reliable in exactly the scenarios (sparse counts, dynamic panels, small true
+effects) where `pannet` currently struggles.
