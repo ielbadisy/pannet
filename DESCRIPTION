@@ -11,8 +11,9 @@ Description: Fits panel and longitudinal regression models with a multilayer
     for panels where the covariate-response relationship is genuinely
     nonlinear: validated across independent simulation replications to
     recover such effects substantially better than a linear panel
-    estimator, closing most of the gap to a semiparametric baseline (see
-    the package vignettes). Supports Gaussian, binomial, Poisson,
+    estimator, and competitively with a correctly-specified additive
+    panel model without requiring the functional form to be named in
+    advance (see the package vignettes). Supports Gaussian, binomial, Poisson,
     multiclass, and fractional outcomes, with pooled, individual-effect,
     time-effect, two-way-effect, and dynamic (lagged) panel structures.
     Training is performed natively via the torch package with no external
@@ -30,6 +31,7 @@ Suggests:
     pglm,
     panglm,
     glmmTMB,
+    mgcv,
     knitr,
     rmarkdown,
     testthat (>= 3.0.0)
