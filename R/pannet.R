@@ -1,67 +1,69 @@
 #' Fit a neural panel regression model
 #'
 #' `pannet()` estimates a neural regression model for panel or longitudinal
-#' data by delegating the network fit to the local [`mlp`](https://cran.r-project.org/package=mlp)
-#' package after panel-aware preprocessing.
+#' data using a multilayer perceptron backbone augmented with additive learnable
+#' individual and time effects.
 #'
 #' The latent predictor is
 #'
-#' `η_it = f_θ(x_it) + a_i + γ_t + h_θ(H_it)`
+#' `eta_it = f_theta(x_it) + a_i + gamma_t`
 #'
-#' where `f_θ` is a multilayer perceptron, `a_i` is an individual effect,
-#' `γ_t` is a time effect, and `h_θ(H_it)` is the dynamic history component.
+#' where `a_i` and `gamma_t` are scalar (or class-specific for multiclass)
+#' learnable embeddings initialised at zero, and `f_theta` is a multi-layer
+#' perceptron. For dynamic models, lags of the outcome (continuous families)
+#' and covariates are appended to `x_it`.
 #'
-#' Outcome families in v0.1 are:
+#' Outcome families:
 #'
-#' - `gaussian`: `y_it ~ Normal(μ_it, σ²)` with `μ_it = η_it`
-#' - `binomial`: `y_it ~ Bernoulli(p_it)` with `p_it = sigmoid(η_it)`
-#' - `poisson`: `y_it ~ Poisson(λ_it)` with `λ_it = exp(η_it)`
-#' - `multiclass`: softmax classification
-#' - `fractional`: response constrained to `[0, 1]`
-#'
-#' The loss is family-specific empirical risk:
-#'
-#' - Gaussian: `mean((y - η)^2)`
-#' - Binomial: binary cross-entropy
-#' - Poisson: Poisson negative log-likelihood
+#' - `gaussian`:   MSE loss; `mu_it = eta_it`
+#' - `binomial`:   BCE with logits; `p_it = sigmoid(eta_it)`
+#' - `poisson`:    Poisson NLL; `lambda_it = exp(eta_it)`
+#' - `multiclass`: categorical CE; `p_itk = softmax(eta_itk)`
+#' - `fractional`: quasi-binomial BCE; `mu_it = sigmoid(eta_it)`
 #'
 #' @param formula A model formula such as `y ~ x1 + x2`.
 #' @param data A data frame containing the panel.
-#' @param id Unit identifier column.
-#' @param time Optional time identifier column.
-#' @param family Outcome family. See Details.
+#' @param id Bare name of the unit identifier column.
+#' @param time Bare name of the time identifier column (optional).
+#' @param family Outcome family. One of `"gaussian"`, `"binomial"`,
+#'   `"poisson"`, `"multiclass"`, `"fractional"`.
 #' @param model Panel architecture: `"pooled"`, `"individual"`, `"time"`,
 #'   `"twoway"`, or `"dynamic"`.
-#' @param hidden Hidden layer sizes passed to [`mlp::mlp()`].
-#' @param activation Activation function for the hidden layers.
+#' @param hidden Hidden layer sizes, e.g. `c(64, 32)`.
+#' @param activation Hidden-layer activation: `"relu"`, `"tanh"`, `"gelu"`.
+#' @param dropout Dropout rate(s); scalar or one per hidden layer.
+#' @param batch_norm Whether to apply batch normalisation after each hidden layer.
+#' @param residual Whether to add skip connections between blocks of equal width.
+#' @param lr_schedule Learning rate schedule: `"none"`, `"cosine"`, or `"step"`.
 #' @param epochs Number of training epochs.
 #' @param batch_size Mini-batch size.
 #' @param lr Learning rate.
-#' @param optimizer Optimizer passed to [`mlp::mlp()`].
-#' @param lags Integer vector of lags for dynamic models.
-#' @param lambda_id L2 penalty for individual effects.
-#' @param lambda_time L2 penalty for time effects.
-#' @param lambda_weights L2 penalty for network weights.
-#' @param validation Validation split fraction used inside the learner.
-#' @param split Panel-aware split rule used for the held-out performance check.
-#' @param standardize Whether to standardize numeric predictors before fitting.
+#' @param optimizer `"adam"` or `"sgd"`.
+#' @param lags Integer vector of lag orders for dynamic models.
+#' @param lambda_id L2 penalty on individual effects.
+#' @param lambda_time L2 penalty on time effects.
+#' @param lambda_weights L2 weight decay on MLP parameters.
+#' @param validation Fraction of units (or time points) held out for early stopping.
+#' @param split Panel-aware split rule: `"by_id"`, `"by_time"`, or `"random"`.
+#' @param standardize Whether to standardise numeric predictors.
 #' @param seed Optional RNG seed.
-#' @param verbose Whether to print training progress.
-#' @param ... Additional arguments forwarded to [`mlp::mlp()`].
+#' @param verbose Whether to print per-epoch progress.
+#' @param device `"auto"`, `"cpu"`, or `"cuda"`.
+#' @param ... Unused.
 #'
 #' @return An object of class `"pannet"`.
 #'
 #' @examples
 #' set.seed(1)
 #' df <- data.frame(
-#'   id = rep(1:5, each = 4),
+#'   id   = rep(1:5, each = 4),
 #'   time = rep(1:4, times = 5),
-#'   x1 = rnorm(20),
-#'   x2 = runif(20),
-#'   y = rnorm(20)
+#'   x1   = rnorm(20),
+#'   x2   = runif(20),
+#'   y    = rnorm(20)
 #' )
 #' fit <- pannet(y ~ x1 + x2, data = df, id = id, time = time,
-#'   family = "gaussian", model = "pooled", epochs = 1, verbose = FALSE)
+#'   family = "gaussian", model = "pooled", epochs = 5, verbose = FALSE)
 #' predict(fit, df)[1:3]
 #'
 #' @export
@@ -69,254 +71,221 @@ pannet <- function(
   formula,
   data,
   id,
-  time = NULL,
-  family = c("gaussian", "binomial", "poisson", "multiclass", "fractional"),
-  model = c("pooled", "individual", "time", "twoway", "dynamic"),
-  hidden = c(32, 16),
-  activation = "relu",
-  epochs = 100,
-  batch_size = 32,
-  lr = 0.001,
-  optimizer = c("adam", "sgd"),
-  lags = NULL,
-  lambda_id = 0,
-  lambda_time = 0,
+  time       = NULL,
+  family     = c("gaussian","binomial","poisson","multiclass","fractional"),
+  model      = c("pooled","individual","time","twoway","dynamic"),
+  hidden     = c(64L, 32L),
+  activation = c("relu","tanh","gelu"),
+  dropout    = 0,
+  batch_norm = TRUE,
+  residual   = FALSE,
+  lr_schedule = c("none","cosine","step"),
+  epochs     = 200L,
+  batch_size = 32L,
+  lr         = 1e-3,
+  optimizer  = c("adam","sgd"),
+  lags       = NULL,
+  lambda_id      = 0,
+  lambda_time    = 0,
   lambda_weights = 0,
   validation = 0.2,
-  split = c("by_id", "by_time", "random"),
+  split      = c("by_id","by_time","random"),
   standardize = TRUE,
-  seed = NULL,
-  verbose = TRUE,
+  seed       = NULL,
+  verbose    = TRUE,
+  device     = c("auto","cpu","cuda"),
   ...
 ) {
-  family <- panel_assert_family(family)
-  model <- panel_assert_model(model)
-  split <- panel_assert_split(split)
-  optimizer <- match.arg(optimizer, c("adam", "sgd"))
-  id_name <- panel_resolve_name(id)
-  time_name <- if (is.null(time)) NULL else panel_resolve_name(time)
+  family     <- panel_assert_family(family)
+  model      <- panel_assert_model(model)
+  split      <- panel_assert_split(split)
+  activation <- match.arg(activation, c("relu","tanh","gelu"))
+  optimizer  <- match.arg(optimizer,  c("adam","sgd"))
+  lr_schedule <- match.arg(lr_schedule, c("none","cosine","step"))
+  device     <- match.arg(device,     c("auto","cpu","cuda"))
+  device     <- if (identical(device, "auto")) {
+    if (isTRUE(torch::cuda_is_available())) "cuda" else "cpu"
+  } else device
 
-  if (!is.data.frame(data)) {
-    stop("`data` must be a data.frame.", call. = FALSE)
-  }
-  if (!id_name %in% names(data)) {
-    stop("`id` column not found in `data`.", call. = FALSE)
-  }
-  if (!is.null(time_name) && !time_name %in% names(data)) {
+  mc        <- match.call()
+  id_name   <- panel_resolve_name(mc$id)
+  time_name <- if (is.null(mc$time)) NULL else panel_resolve_name(mc$time)
+
+  if (!is.data.frame(data))                       stop("`data` must be a data.frame.", call. = FALSE)
+  if (!id_name %in% names(data))                  stop("`id` column not found in `data`.", call. = FALSE)
+  if (!is.null(time_name) && !time_name %in% names(data))
     stop("`time` column not found in `data`.", call. = FALSE)
-  }
 
-  if (!is.null(seed)) {
-    set.seed(seed)
-  }
+  if (!is.null(seed)) set.seed(seed)
 
-  data <- panel_panel_order(data, id_name, time_name)
-  idx <- panel_add_index_columns(data, id_name, time_name)
-  data <- idx$data
-  time_name <- idx$time_name
+  idx_result <- panel_add_index_columns(
+    panel_panel_order(data, id_name, time_name), id_name, time_name
+  )
+  data      <- idx_result$data
+  time_name <- idx_result$time_name
 
   spec <- panel_prepare_spec(
-    formula = formula,
-    data = data,
-    id_name = id_name,
-    time_name = time_name,
-    model = model,
-    family = family,
-    lags = lags,
+    formula     = formula,
+    data        = data,
+    id_name     = id_name,
+    time_name   = time_name,
+    model       = model,
+    family      = family,
+    lags        = lags,
     standardize = standardize
   )
-  if (is.null(time)) {
-    spec$time_name <- NULL
+  if (is.null(mc$time)) spec$time_name <- NULL
+
+  # Remove rows with missing design or response values
+  complete_rows <- stats::complete.cases(spec$x_train, spec$y_encoded)
+  x_full  <- spec$x_train[complete_rows, , drop = FALSE]
+  y_full  <- spec$y_encoded[complete_rows]
+  data_ok <- spec$prepared_data[complete_rows, , drop = FALSE]
+
+  design_full <- panel_build_design(data_ok, spec)
+  id_idx_full   <- if (spec$use_id)   design_full$id_idx   else NULL
+  time_idx_full <- if (spec$use_time) design_full$time_idx else NULL
+
+  split_idx <- panel_split_indices(data_ok, id_name, spec$time_name %||% ".pannet_time", split, validation)
+  train_idx <- split_idx$train
+  valid_idx <- split_idx$valid
+
+  if (length(train_idx) == 0L) stop("Training split is empty.", call. = FALSE)
+  if (length(valid_idx) == 0L) {
+    valid_idx <- train_idx
   }
 
-  data <- spec$prepared_data
-  design <- spec$x_train
-  y_train <- spec$y_train
+  hidden_int <- as.integer(hidden)
+  dropout_v  <- if (length(dropout) == 1L) rep(dropout, length(hidden_int)) else dropout
 
-  complete_rows <- stats::complete.cases(design, y_train)
-  design <- design[complete_rows, , drop = FALSE]
-  y_train <- y_train[complete_rows]
-  data <- data[complete_rows, , drop = FALSE]
-
-  split_idx <- panel_split_indices(data, id_name, time_name, split, validation)
-  train_rows <- split_idx$train
-  valid_rows <- split_idx$valid
-  if (length(train_rows) == 0L) {
-    stop("Training split is empty.", call. = FALSE)
-  }
-
-  x_train <- design[train_rows, , drop = FALSE]
-  y_fit <- y_train[train_rows]
-
-  task <- if (family %in% c("binomial", "multiclass")) "classification" else "regression"
-  mlp_fit <- mlp::mlp(
-    x = x_train,
-    y = y_fit,
-    task = task,
-    hidden_units = hidden,
-    activation = activation,
-    epochs = epochs,
-    batch_size = batch_size,
-    lr = lr,
-    optimizer = optimizer,
-    validation = 0.05,
-    early_stopping = FALSE,
-    min_epochs = 1,
+  result <- pannet_train(
+    x            = x_full,
+    y_encoded    = y_full,
+    id_idx       = id_idx_full,
+    time_idx     = time_idx_full,
+    family       = family,
+    output_dim   = spec$output_dim,
+    hidden_units = hidden_int,
+    activation   = activation,
+    dropout      = dropout_v,
+    batch_norm   = batch_norm,
+    residual     = residual,
+    n_id         = spec$n_id,
+    n_time       = spec$n_time,
+    epochs       = as.integer(epochs),
+    batch_size   = as.integer(batch_size),
+    lr           = lr,
+    optimizer    = optimizer,
+    lr_schedule  = lr_schedule,
     weight_decay = lambda_weights,
-    verbose = verbose,
-    ...
+    lambda_id    = lambda_id,
+    lambda_time  = lambda_time,
+    train_idx    = train_idx,
+    valid_idx    = valid_idx,
+    verbose      = verbose,
+    device       = device,
+    seed         = seed
   )
 
-  training_pred <- panel_predict_internal(
-    object = mlp_fit,
-    design = design,
-    family = family,
-    type = "response"
+  # Fitted values (full training data)
+  eta_fit <- pannet_forward(result$model, x_full, id_idx_full, time_idx_full, device)
+  fitted_vals <- pannet_eta_to_response(
+    eta_fit, family, spec$y_center, spec$y_scale, "response", spec$levels
   )
 
-  train_loss <- mlp_fit$training_history
-  valid_loss <- NA_real_
-  if (length(valid_rows)) {
-    valid_pred <- panel_predict_internal(
-      object = mlp_fit,
-      design = design[valid_rows, , drop = FALSE],
-      family = family,
-      type = "response"
+  # Holdout loss on the validation set
+  eta_val  <- eta_fit  # already computed above; slice valid rows
+  y_val_raw <- spec$y_raw[complete_rows][valid_idx]
+  holdout_loss <- tryCatch({
+    y_pred_val <- if (is.matrix(fitted_vals)) fitted_vals[valid_idx, , drop = FALSE] else fitted_vals[valid_idx]
+    switch(family,
+      gaussian   = sqrt(mean((as.numeric(y_val_raw) - as.numeric(y_pred_val))^2, na.rm = TRUE)),
+      binomial   = mean((panel_binary_to_numeric(y_val_raw) - as.numeric(y_pred_val))^2, na.rm = TRUE),
+      poisson    = sqrt(mean((as.numeric(y_val_raw) - as.numeric(y_pred_val))^2, na.rm = TRUE)),
+      multiclass = mean(as.character(y_val_raw) != as.character(y_pred_val), na.rm = TRUE),
+      fractional = sqrt(mean((as.numeric(y_val_raw) - as.numeric(y_pred_val))^2, na.rm = TRUE))
     )
-    valid_loss <- panel_eval_loss(
-      y_true = spec$y_raw[valid_rows],
-      y_pred = valid_pred,
-      family = family
-    )
-  }
+  }, error = function(e) NA_real_)
 
-  out <- structure(
+  structure(
     list(
-      call = match.call(),
+      call    = mc,
       formula = formula,
-      family = family,
-      model = model,
-      id = id_name,
-      time = if (is.null(time)) NULL else time_name,
-      terms = terms(formula),
-      x_names = colnames(design),
-      levels = list(id = levels(data[[id_name]]), time = if (is.null(time)) NULL else levels(data[[time_name]])),
+      family  = family,
+      model   = model,
+      id      = id_name,
+      time    = if (is.null(mc$time)) NULL else spec$time_name,
+      terms   = terms(formula),
+      x_names = spec$x_names,
+      levels  = spec$levels,
       standardization = list(
-        center = spec$center,
-        scale = spec$scale,
+        center             = spec$center,
+        scale              = spec$scale,
         standardized_columns = spec$center_columns
       ),
       panel = list(
-        id_name = id_name,
-        time_name = if (is.null(time)) NULL else time_name,
-        id_levels = spec$id_levels,
+        id_name    = id_name,
+        time_name  = spec$time_name,
+        id_levels  = spec$id_levels,
         time_levels = spec$time_levels,
-        factor_levels = spec$factor_levels,
-        lag_columns = spec$lag_columns,
-        lag_base_vars = spec$lag_base_vars,
-        design_formula = spec$design_formula,
-        design_vars = spec$design_vars,
-        numeric_columns = spec$numeric_columns,
-        factor_columns = spec$factor_columns,
-        column_means = spec$column_means,
-        complete_rows = complete_rows,
-        train_rows = train_rows,
-        valid_rows = valid_rows
+        use_id     = spec$use_id,
+        use_time   = spec$use_time,
+        n_id       = spec$n_id,
+        n_time     = spec$n_time,
+        lag_columns    = spec$lag_columns,
+        lag_base_vars  = spec$lag_base_vars,
+        complete_rows  = complete_rows,
+        train_rows     = train_idx,
+        valid_rows     = valid_idx
       ),
-      network = mlp_fit$network,
-      fit = mlp_fit,
+      network    = result$model,
+      device     = device,
       parameters = list(
-        hidden = hidden,
+        hidden     = hidden_int,
         activation = activation,
-        epochs = epochs,
-        batch_size = batch_size,
-        lr = lr,
-        optimizer = optimizer,
-        lags = lags,
-        lambda_id = lambda_id,
+        dropout    = dropout_v,
+        batch_norm = batch_norm,
+        residual   = residual,
+        epochs     = as.integer(epochs),
+        batch_size = as.integer(batch_size),
+        lr         = lr,
+        optimizer  = optimizer,
+        lr_schedule = lr_schedule,
+        lags       = lags,
+        lambda_id  = lambda_id,
         lambda_time = lambda_time,
         lambda_weights = lambda_weights,
         validation = validation,
-        split = split,
+        split      = split,
         standardize = standardize,
-        seed = seed
+        seed       = seed
       ),
       training = list(
-        loss = train_loss$train_loss,
-        validation_loss = train_loss$valid_loss,
-        epochs = train_loss$epoch,
-        optimizer = optimizer,
-        lr = lr,
-        converged = isTRUE(mlp_fit$best_epoch <= epochs),
-        best_epoch = mlp_fit$best_epoch,
-        best_validation_loss = mlp_fit$best_validation_loss,
-        holdout_loss = valid_loss
+        history            = result$history,
+        loss               = result$history$train_loss,
+        validation_loss    = result$history$valid_loss,
+        epochs             = result$history$epoch,
+        optimizer          = optimizer,
+        lr                 = lr,
+        best_epoch         = result$best_epoch,
+        best_validation_loss = result$best_loss,
+        holdout_loss       = holdout_loss,
+        converged          = result$best_epoch < as.integer(epochs)
       ),
       data_info = list(
-        n = nrow(data),
-        n_id = length(unique(data[[id_name]])),
-        n_time = if (is.null(time)) NA_integer_ else length(unique(data[[time_name]])),
-        balanced = if (is.null(time)) NA else length(unique(table(data[[id_name]]))) == 1L
+        n        = nrow(data_ok),
+        n_id     = length(unique(data_ok[[id_name]])),
+        n_time   = if (is.null(mc$time)) NA_integer_
+                   else length(unique(data_ok[[spec$time_name]])),
+        balanced = if (is.null(mc$time)) NA
+                   else length(unique(table(data_ok[[id_name]]))) == 1L
       ),
-      fitted = training_pred,
-      raw_data = data,
-      spec = spec
+      fitted   = fitted_vals,
+      raw_data = data_ok,
+      spec     = spec
     ),
     class = "pannet"
   )
-  out
 }
 
-#' Internal prediction helper for pannet fits
-#'
-#' This function converts the fitted `mlp` object back to the family-specific
-#' response scale. For example, Gaussian predictions satisfy `μ = η`,
-#' binomial predictions satisfy `p = sigmoid(η)`, and Poisson predictions
-#' satisfy `λ = exp(η)`.
-#'
-#' @keywords internal
-panel_predict_internal <- function(object, design, family, type = c("response", "link", "prob", "class")) {
-  type <- match.arg(type)
-  if (family %in% c("binomial", "multiclass")) {
-    if (type %in% c("response", "class")) {
-      pred <- stats::predict(object, new_data = design, type = if (type == "class") "class" else "prob")
-      if (family == "binomial") {
-        if (is.matrix(pred)) {
-          pos <- colnames(pred)[ncol(pred)]
-          return(as.numeric(pred[, pos]))
-        }
-        return(as.numeric(pred == levels(pred)[2L]))
-      }
-      if (type == "class") {
-        return(pred)
-      }
-      if (is.matrix(pred)) {
-        return(factor(colnames(pred)[max.col(pred)], levels = colnames(pred)))
-      }
-      return(pred)
-    }
-    pred <- stats::predict(object, new_data = design, type = "prob")
-    if (family == "binomial") {
-      return(qlogis(pmin(pmax(pred[, ncol(pred)], 1e-8), 1 - 1e-8)))
-    }
-    return(log(pmin(pmax(pred, 1e-8), 1)))
-  }
-
-  pred <- stats::predict(object, new_data = design, type = "response")
-  if (type == "link") {
-    if (family == "poisson") {
-      return(log1p(pmax(pred, -1 + 1e-8)))
-    }
-    if (family == "fractional") {
-      return(qlogis(pmin(pmax(pred, 1e-8), 1 - 1e-8)))
-    }
-    return(pred)
-  }
-  if (family == "poisson") {
-    return(expm1(pred))
-  }
-  if (family == "fractional") {
-    return(plogis(pred))
-  }
-  pred
-}
+`%||%` <- function(a, b) if (is.null(a)) b else a
