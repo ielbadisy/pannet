@@ -24,6 +24,8 @@ Imports:
 Suggests:
     plm,
     pglm,
+    panglm,
+    glmmTMB,
     knitr,
     rmarkdown,
     testthat (>= 3.0.0)
