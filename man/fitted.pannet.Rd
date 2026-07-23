@@ -12,7 +12,7 @@
 \item{...}{Unused.}
 }
 \value{
-The fitted response values on the response scale.
+Fitted response values.
 }
 \description{
 Fitted values for a pannet model
