@@ -2,7 +2,7 @@
 % Please edit documentation in R/methods.R
 \name{summary.pannet}
 \alias{summary.pannet}
-\title{Summarize a fitted pannet model}
+\title{Summarise a fitted pannet model}
 \usage{
 \method{summary}{pannet}(object, ...)
 }
@@ -12,8 +12,8 @@
 \item{...}{Unused.}
 }
 \value{
-A list of model summary components.
+A list of class \code{"summary.pannet"}.
 }
 \description{
-Summarize a fitted pannet model
+Summarise a fitted pannet model
 }
