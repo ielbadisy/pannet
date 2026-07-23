@@ -284,6 +284,34 @@ pannet_benchmark <- function(
     }
   }
 
+  # --- Classical: panglm (fast FE/RE for gaussian/poisson) ---
+  if (family %in% c("gaussian", "poisson") && requireNamespace("panglm", quietly = TRUE)) {
+    for (pg_model in c("within", "random")) {
+      nm <- paste0("panglm (", if (pg_model == "within") "FE" else "RE", ")")
+      t0 <- proc.time()[["elapsed"]]
+      fit_pl <- tryCatch(
+        panglm::panglm(formula, data = data, index = c(id_name, time_name),
+                        model = pg_model, family = family),
+        error = function(e) NULL
+      )
+      elapsed <- proc.time()[["elapsed"]] - t0
+      if (is.null(fit_pl)) next
+      # panglm's predict() is coefficient-only (no unit intercept for
+      # genuinely new individuals, the same limitation plm's FE predict
+      # has above); fine for this relative-performance comparison.
+      y_pred <- tryCatch(
+        stats::predict(fit_pl, newdata = test_data, type = "response"),
+        error = function(e) NULL
+      )
+      if (is.null(y_pred)) next
+      m <- metric_fn(y_test_raw, y_pred, family)
+      results[[nm]] <- data.frame(
+        estimator = nm, metric = m, metric_name = metric_label,
+        time_sec = elapsed, stringsAsFactors = FALSE
+      )
+    }
+  }
+
   # --- Assemble and print ---
   out <- do.call(rbind, results)
   rownames(out) <- NULL
