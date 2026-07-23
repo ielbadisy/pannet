@@ -1,18 +1,22 @@
 Package: pannet
 Type: Package
-Title: Neural Regression Models for Panel Data
+Title: Neural Regression for Panel Data with Nonlinear Covariate Effects
 Version: 0.1.0
 Authors@R: person(given = "Imad", family = "El-Badisy", role = c("aut", "cre"),
     email = "elbadisyimad@gmail.com")
-Description: Implements neural regression models for panel and longitudinal data.
-    The package provides multilayer perceptron architectures with pooled,
-    individual-effect, time-effect, two-way-effect, and dynamic panel structures.
-    Individual and time effects are learnable additive scalar embeddings initialised
-    at zero and jointly optimised with the network weights. Supported outcome
-    families include Gaussian (MSE), binomial (binary cross-entropy), Poisson
-    (negative log-likelihood), multiclass (categorical cross-entropy), and
-    fractional (quasi-binomial) outcomes. Training is performed natively via the
-    torch package with no external learner dependency.
+Description: Fits panel and longitudinal regression models with a multilayer
+    perceptron in place of the linear index used by classical fixed- and
+    random-effects estimators, while keeping additive learnable individual
+    and time effects a plain neural network would otherwise drop. Intended
+    for panels where the covariate-response relationship is genuinely
+    nonlinear: validated across independent simulation replications to
+    recover such effects substantially better than a linear panel
+    estimator, closing most of the gap to a semiparametric baseline (see
+    the package vignettes). Supports Gaussian, binomial, Poisson,
+    multiclass, and fractional outcomes, with pooled, individual-effect,
+    time-effect, two-way-effect, and dynamic (lagged) panel structures.
+    Training is performed natively via the torch package with no external
+    learner dependency.
 License: GPL-3
 Encoding: UTF-8
 LazyData: true
