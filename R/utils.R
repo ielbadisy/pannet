@@ -234,8 +234,16 @@ panel_prepare_spec <- function(formula, data, id_name, time_name, model,
 panel_build_design <- function(data, spec, new_id_strategy = c("zero", "mean", "error")) {
   new_id_strategy <- match.arg(new_id_strategy)
 
-  # Rebuild lag columns if they are absent from data
-  if (length(spec$lag_columns) && !all(spec$lag_columns %in% names(data))) {
+  # Always rebuild lag columns from the raw variables when the model has
+  # any. Checking only whether the *column names* are already present (the
+  # previous condition) is not sufficient: predict.pannet()'s newdata path
+  # combines new rows with training data via rbind(), which means the new
+  # rows inherit the lag column *names* from training (already-fitted
+  # values) while their own lag *values* are NA placeholders -- so the old
+  # "already present" check skipped rebuilding and silently fed those NAs
+  # (zero-filled downstream) into the network instead of the true lagged
+  # history. Rebuilding is idempotent and cheap, so just always do it.
+  if (length(spec$lag_columns)) {
     data <- panel_rebuild_lags(data, spec$id_name, spec$time_name, spec$lag_columns)
   }
 
@@ -253,14 +261,31 @@ panel_build_design <- function(data, spec, new_id_strategy = c("zero", "mean", "
   }
 
   mm_terms <- delete.response(terms(spec$design_formula))
-  mm <- model.matrix(mm_terms, data = data)
+  # model.matrix()'s default na.action (na.omit) silently DROPS any row with
+  # an NA in any term -- including the lag columns, which are NA for every
+  # individual's first `lag` training periods. That corrupts the row count
+  # (and hence the boolean-marker row alignment predict.pannet relies on)
+  # for any dynamic-model design. Build the model.frame with na.action =
+  # na.pass explicitly and pass *that* (already class "model.frame") to
+  # model.matrix(), which then uses it as-is rather than re-deriving it
+  # with the default na.action.
+  mf_pred <- model.frame(mm_terms, data = data, na.action = na.pass)
+  mm <- model.matrix(mm_terms, data = mf_pred)
   if ("(Intercept)" %in% colnames(mm)) mm <- mm[, colnames(mm) != "(Intercept)", drop = FALSE]
+  if (nrow(mm) != nrow(data)) {
+    # model.matrix() can still drop rows for reasons na.pass doesn't cover
+    # (e.g. a factor level combination it can't represent); re-expand to
+    # the full row count with NA so downstream alignment stays correct
+    # and the NA-handling below has a chance to act on them.
+    full <- matrix(NA_real_, nrow(data), ncol(mm), dimnames = list(NULL, colnames(mm)))
+    full[match(rownames(mm), rownames(mf_pred)), ] <- mm
+    mm <- full
+  }
 
   # offset(...), if the model was fit with one: required in new data too
   # (matching glm()'s convention), since there's no principled default.
   offset_vec <- rep(0, nrow(data))
   if (isTRUE(spec$has_offset)) {
-    mf_pred <- model.frame(mm_terms, data = data, na.action = na.pass)
     off <- stats::model.offset(mf_pred)
     if (is.null(off)) {
       stop("This model was fit with an offset() term; `data`/`newdata` must ",
