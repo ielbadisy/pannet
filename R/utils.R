@@ -145,6 +145,14 @@ panel_prepare_spec <- function(formula, data, id_name, time_name, model,
   mm  <- model.matrix(delete.response(terms(design_formula)), data = mf)
   if ("(Intercept)" %in% colnames(mm)) mm <- mm[, colnames(mm) != "(Intercept)", drop = FALSE]
 
+  # offset(...) terms (e.g. offset(log(exposure))) are recognised by base R's
+  # formula/terms machinery automatically -- excluded from the design matrix
+  # above, retrievable here via model.offset(). Added to eta post-hoc (not
+  # fed through the MLP), the standard glm() convention.
+  offset_vec <- stats::model.offset(mf)
+  if (is.null(offset_vec)) offset_vec <- rep(0, nrow(mf))
+  offset_vec <- as.numeric(offset_vec)
+
   # Standardise numeric predictor columns
   mm_center <- stats::setNames(rep(0, ncol(mm)), colnames(mm))
   mm_scale  <- stats::setNames(rep(1, ncol(mm)), colnames(mm))
@@ -209,6 +217,8 @@ panel_prepare_spec <- function(formula, data, id_name, time_name, model,
     y_encoded       = yenc$y,
     y_center        = yenc$center,
     y_scale         = yenc$scale,
+    offset          = offset_vec,
+    has_offset      = !is.null(stats::model.offset(mf)),
     prepared_data   = data
   )
   class(spec) <- "pannet_spec"
@@ -245,6 +255,19 @@ panel_build_design <- function(data, spec, new_id_strategy = c("zero", "mean", "
   mm_terms <- delete.response(terms(spec$design_formula))
   mm <- model.matrix(mm_terms, data = data)
   if ("(Intercept)" %in% colnames(mm)) mm <- mm[, colnames(mm) != "(Intercept)", drop = FALSE]
+
+  # offset(...), if the model was fit with one: required in new data too
+  # (matching glm()'s convention), since there's no principled default.
+  offset_vec <- rep(0, nrow(data))
+  if (isTRUE(spec$has_offset)) {
+    mf_pred <- model.frame(mm_terms, data = data, na.action = na.pass)
+    off <- stats::model.offset(mf_pred)
+    if (is.null(off)) {
+      stop("This model was fit with an offset() term; `data`/`newdata` must ",
+           "supply the same offset variable(s).", call. = FALSE)
+    }
+    offset_vec <- as.numeric(off)
+  }
 
   # Apply standardisation
   for (nm in spec$center_columns) {
@@ -291,7 +314,7 @@ panel_build_design <- function(data, spec, new_id_strategy = c("zero", "mean", "
     time_idx <- as.integer(time_mapped)
   }
 
-  list(x = mm, id_idx = id_idx, time_idx = time_idx)
+  list(x = mm, id_idx = id_idx, time_idx = time_idx, offset = offset_vec)
 }
 
 .pannet_sentinel_idx <- function(n) as.integer(n) + 1L
