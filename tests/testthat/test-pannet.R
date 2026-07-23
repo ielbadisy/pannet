@@ -150,6 +150,20 @@ test_that("dynamic model runs and predicts on new periods", {
   expect_length(p, 3L)
 })
 
+test_that("dynamic model has no panel-effect embeddings (extractors return NULL, not an error)", {
+  set.seed(1)
+  df <- data.frame(
+    id   = rep(1:4, each = 5), time = rep(1:5, times = 4),
+    x1   = rnorm(20),
+    y    = rnorm(20)
+  )
+  fit <- pannet(y ~ x1, data = df, id = id, time = time,
+                family = "gaussian", model = "dynamic", lags = 1,
+                epochs = 5, verbose = FALSE, validation = 0)
+  expect_null(individual_effects(fit))
+  expect_null(time_effects(fit))
+})
+
 test_that("dynamic model includes lagged outcome in design for gaussian", {
   set.seed(1)
   df <- data.frame(
