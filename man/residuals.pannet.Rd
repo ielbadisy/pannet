@@ -12,7 +12,7 @@
 \item{...}{Unused.}
 }
 \value{
-Residuals on the response scale.
+Response-scale residuals.
 }
 \description{
 Residuals from a fitted pannet model
