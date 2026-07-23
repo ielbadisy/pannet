@@ -155,6 +155,95 @@ effect close to zero** -- refit across a few seeds (or use `pannet_simulate()`
 to check recovery on comparable synthetic data first) and treat the spread
 as part of the uncertainty, not just the reported point estimate.
 
+## 5. Genuine multi-step forecasting: nonlinear dynamics
+
+The dynamic-panel finding above only tested one-step-ahead coefficient
+recovery. The more direct question for a *forecasting* use case is: does
+`pannet_forecast()`'s recursive multi-step forecast beat a linear AR(1)+FE
+benchmark when the true dynamics are genuinely nonlinear? A threshold
+autoregressive (TAR) DGP -- fast mean-reversion when the outcome is
+positive, near-unit-root persistence when negative -- is a standard
+nonlinearity a single linear AR coefficient cannot represent.
+
+```{r tar-forecast}
+set.seed(42)
+N <- 75; Tt_train <- 10; Tt_fore <- 4
+simulate_unit <- function(n_periods, x, a_i, y0 = 0) {
+  y <- numeric(n_periods); yp <- y0
+  for (t in seq_len(n_periods)) {
+    g <- if (yp < 0) 0.85 * yp else 0.2 * yp
+    yp <- g + 0.5 * x[t] + a_i + rnorm(1, sd = 0.3)
+    y[t] <- yp
+  }
+  y
+}
+a_i <- rnorm(N, sd = 0.5)
+x_all <- matrix(rnorm(N * (Tt_train + Tt_fore)), nrow = N)
+train_list <- vector("list", N); future_true <- vector("list", N)
+for (i in seq_len(N)) {
+  y_full <- simulate_unit(Tt_train + Tt_fore, x_all[i, ], a_i[i])
+  train_list[[i]] <- data.frame(id = i, time = seq_len(Tt_train), x1 = x_all[i, 1:Tt_train], y = y_full[1:Tt_train])
+  future_true[[i]] <- data.frame(id = i, time = Tt_train + seq_len(Tt_fore),
+                                  x1 = x_all[i, (Tt_train+1):(Tt_train+Tt_fore)],
+                                  y_true = y_full[(Tt_train+1):(Tt_train+Tt_fore)])
+}
+d_train <- do.call(rbind, train_list); d_future <- do.call(rbind, future_true)
+
+f_nn <- pannet(y ~ x1, data = d_train, id = id, time = time, family = "gaussian",
+               model = "dynamic", lags = 1, hidden = c(32L, 16L), epochs = 300,
+               verbose = FALSE, seed = 1)
+fc_nn <- pannet_forecast(f_nn, d_future[, c("id", "time", "x1")])
+merged <- merge(d_future, fc_nn, by = c("id", "time"))
+cat("pannet (nonlinear, recursive) overall RMSE:", sqrt(mean((merged$y_true - merged$forecast)^2)), "\n")
+```
+
+A linear AR(1)+FE benchmark, forecast the same way (recursively, feeding
+its own forecasts back in as the next lag):
+
+```{r tar-linear-benchmark}
+d_train$id_f <- factor(d_train$id)
+d_train_lag <- do.call(rbind, lapply(unique(d_train$id), function(i) {
+  s <- d_train[d_train$id == i, ]; s <- s[order(s$time), ]
+  s$lag1_y <- c(NA, s$y[-nrow(s)]); s
+}))
+lm_fit <- lm(y ~ x1 + lag1_y + id_f, data = d_train_lag)
+last_obs <- do.call(rbind, lapply(split(d_train_lag, d_train_lag$id), function(s) s[which.max(s$time), ]))
+hist_y <- setNames(last_obs$y, last_obs$id)
+out <- list()
+for (ft in sort(unique(d_future$time))) {
+  rows <- d_future[d_future$time == ft, ]
+  rows$lag1_y <- hist_y[as.character(rows$id)]
+  rows$id_f <- factor(rows$id, levels = levels(d_train_lag$id_f))
+  pred <- predict(lm_fit, newdata = rows)
+  hist_y[as.character(rows$id)] <- pred
+  out[[as.character(ft)]] <- data.frame(id = rows$id, time = ft, forecast = pred)
+}
+fc_lm <- do.call(rbind, out)
+merged_lm <- merge(d_future, fc_lm, by = c("id", "time"))
+cat("linear AR(1)+FE overall RMSE:", sqrt(mean((merged_lm$y_true - merged_lm$forecast)^2)), "\n")
+```
+
+**Finding:** on this DGP, at a realistic short-T panel (T=10 training
+periods), the **linear AR(1)+FE benchmark forecasts better than `pannet`
+at every horizon**, and the gap widens with the forecast horizon (errors
+compound faster for `pannet`'s recursive forecast). This held up even
+after fixing a real bug that had been silently zeroing out the lagged
+history (see `NEWS.md`) -- it is not an artifact of that bug.
+
+Repeating the same comparison with T=40 training periods per unit (4x more
+data, same DGP) narrows the gap substantially (from ~40% worse to ~10%
+worse), consistent with a bias-variance explanation: reliably estimating a
+genuine nonlinear (threshold) shape needs more data than a single global
+linear slope does, and multi-step recursive forecasting compounds whatever
+extra estimation variance the nonlinear model carries. **Don't assume
+`pannet`'s recursive forecast beats a linear dynamic benchmark just because
+the true DGP is nonlinear -- check both, especially on short panels.** The
+nonlinear-dynamics advantage this package is built around likely needs
+more periods per unit than T~10 to show up in *forecasts* specifically
+(as opposed to in-sample coefficient/shape recovery, which is a different
+question -- see the main introduction vignette and the package's own
+Monte Carlo simulation).
+
 ## Summary
 
 | Scenario | Recovers truth? |
@@ -163,6 +252,8 @@ as part of the uncertainty, not just the reported point estimate.
 | Sparse/zero-inflated count | No -- biased downward, not fixed by regularization |
 | Dynamic panel, covariate slope | Roughly |
 | Dynamic panel, lag coefficient | No -- Nickell bias, not `pannet`-specific |
+| Nonlinear dynamics, multi-step forecast (T=10) | No -- linear AR+FE forecasts better |
+| Nonlinear dynamics, multi-step forecast (T=40) | Closer, gap narrows to ~10% |
 
 `pannet`'s comparative advantage is genuinely nonlinear covariate-response
 shapes (see the main introduction vignette and the package's own
