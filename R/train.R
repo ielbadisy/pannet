@@ -34,7 +34,8 @@ pannet_train <- function(
   weight_decay, lambda_id, lambda_time,
   train_idx, valid_idx,
   verbose, device, seed,
-  patience_frac = 0.15
+  patience_frac = 0.15,
+  offset = NULL
 ) {
   if (!is.null(seed)) torch::torch_manual_seed(as.integer(seed))
 
@@ -71,11 +72,18 @@ pannet_train <- function(
   make_x_t  <- function(idx) torch::torch_tensor(x[idx, , drop = FALSE], dtype = torch::torch_float(), device = device)
   make_id_t <- function(idx) if (!is.null(id_idx))   torch::torch_tensor(id_idx[idx],   dtype = torch::torch_long(), device = device) else NULL
   make_tm_t <- function(idx) if (!is.null(time_idx)) torch::torch_tensor(time_idx[idx], dtype = torch::torch_long(), device = device) else NULL
+  has_offset <- !is.null(offset) && any(offset != 0)
+  # eta from the network head is [n, output_dim] (output_dim = 1 for the
+  # single-output families offset() applies to); shape the offset the same
+  # way so torch adds elementwise instead of broadcasting [n,1] + [n] into
+  # an [n,n] outer sum.
+  make_off_t <- function(idx) if (has_offset) torch::torch_tensor(matrix(offset[idx], ncol = 1), dtype = torch::torch_float(), device = device) else NULL
 
   x_vl   <- make_x_t(valid_idx)
   y_vl   <- make_y_t(valid_idx)
   id_vl  <- make_id_t(valid_idx)
   tm_vl  <- make_tm_t(valid_idx)
+  off_vl <- make_off_t(valid_idx)
   y_enc_vl <- y_encoded[valid_idx]
 
   n_train    <- length(train_idx)
@@ -101,9 +109,11 @@ pannet_train <- function(
       by    <- make_y_t(rows)
       bid   <- make_id_t(rows)
       btm   <- make_tm_t(rows)
+      boff  <- make_off_t(rows)
 
       opt$zero_grad()
       eta  <- model(bx, bid, btm)
+      if (!is.null(boff)) eta <- eta + boff
       loss <- criterion(eta, by) + pannet_panel_penalty(model, lambda_id, lambda_time)
       loss$backward()
       torch::nn_utils_clip_grad_norm_(model$parameters, max_norm = 5)
@@ -114,6 +124,7 @@ pannet_train <- function(
     model$eval()
     torch::with_no_grad({
       eta_vl   <- model(x_vl, id_vl, tm_vl)
+      if (!is.null(off_vl)) eta_vl <- eta_vl + off_vl
       v_loss   <- as.numeric(criterion(eta_vl, y_vl)$item())
       eta_arr  <- if (family == "multiclass") as.array(eta_vl$to(device = "cpu")) else as.numeric(eta_vl$to(device = "cpu"))
       v_metric <- pannet_valid_metric(family, y_enc_vl, eta_arr)
@@ -163,11 +174,19 @@ pannet_train <- function(
 }
 
 # Run model forward on a design matrix and return raw eta array (CPU).
-pannet_forward <- function(model, x, id_idx, time_idx, device) {
+# offset (optional): numeric vector, added to eta post-hoc (single-output
+# families only -- offset() with family = "multiclass" is rejected earlier
+# in pannet()/predict.pannet(), since a scalar offset can't broadcast
+# sensibly across a per-class eta matrix).
+pannet_forward <- function(model, x, id_idx, time_idx, device, offset = NULL) {
   model$eval()
   x_t  <- torch::torch_tensor(x, dtype = torch::torch_float(), device = device)
   id_t <- if (!is.null(id_idx))   torch::torch_tensor(as.integer(id_idx),   dtype = torch::torch_long(), device = device) else NULL
   tm_t <- if (!is.null(time_idx)) torch::torch_tensor(as.integer(time_idx), dtype = torch::torch_long(), device = device) else NULL
   eta  <- torch::with_no_grad(model(x_t, id_t, tm_t))
+  if (!is.null(offset) && any(offset != 0)) {
+    off_t <- torch::torch_tensor(matrix(as.numeric(offset), ncol = 1), dtype = torch::torch_float(), device = device)
+    eta <- eta + off_t
+  }
   as.array(eta$to(device = "cpu"))
 }
