@@ -3,6 +3,19 @@
 Initial release. Native `torch` backend (replacing the earlier `mlp`-package
 delegation).
 
+## Validation
+
+* Nonlinear covariate-effect recovery benchmark (5 seeds x 2 DGPs, see
+  `vignette("pannet-validation")` and `README.md`): `pannet` beats an exact
+  linear panel FE estimator (`panglm`) by a replicated 17-24% margin. The
+  fair panel-model comparator is a GAMM (`gam(... + s(id, bs = "re"))`),
+  not a pooled GAM with no individual effects -- an earlier draft of this
+  benchmark used the latter and overstated the gap to a purpose-built
+  additive model; corrected before release. Against the GAMM, `pannet`
+  ties on the harder DGP and trails slightly on the easier one.
+  `tests/testthat/test-nonlinear-recovery.R` is a permanent regression
+  guard on the `panglm` comparison.
+
 ## Features
 
 * MLP backbone with additive learnable individual/time embeddings; `model =
