@@ -16,6 +16,18 @@ delegation).
   `tests/testthat/test-nonlinear-recovery.R` is a permanent regression
   guard on the `panglm` comparison.
 
+## Dynamic panel bias
+
+* `pannet_debias()`: split-panel jackknife bias correction (Dhaene &
+  Jochmans, 2015) for `model = "dynamic"` fits. Any lagged-dependent-
+  variable panel estimator is inconsistent at finite T (Nickell, 1981);
+  since `pannet` is a neural architecture, no closed-form LSDV-style
+  correction applies, so this fits the full panel and two time-split
+  half-panels separately and corrects the average marginal effect of each
+  covariate as `2*full - 0.5*(half1 + half2)`. A model-agnostic outer
+  wrapper around three ordinary `pannet()` calls; it does not change the
+  training loop.
+
 ## Features
 
 * MLP backbone with additive learnable individual/time embeddings; `model =
