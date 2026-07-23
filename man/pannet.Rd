@@ -11,10 +11,14 @@ pannet(
   time = NULL,
   family = c("gaussian", "binomial", "poisson", "multiclass", "fractional"),
   model = c("pooled", "individual", "time", "twoway", "dynamic"),
-  hidden = c(32, 16),
-  activation = "relu",
-  epochs = 100,
-  batch_size = 32,
+  hidden = c(64L, 32L),
+  activation = c("relu", "tanh", "gelu"),
+  dropout = 0,
+  batch_norm = TRUE,
+  residual = FALSE,
+  lr_schedule = c("none", "cosine", "step"),
+  epochs = 200L,
+  batch_size = 32L,
   lr = 0.001,
   optimizer = c("adam", "sgd"),
   lags = NULL,
@@ -26,6 +30,7 @@ pannet(
   standardize = TRUE,
   seed = NULL,
   verbose = TRUE,
+  device = c("auto", "cpu", "cuda"),
   ...
 )
 }
@@ -34,18 +39,27 @@ pannet(
 
 \item{data}{A data frame containing the panel.}
 
-\item{id}{Unit identifier column.}
+\item{id}{Bare name of the unit identifier column.}
 
-\item{time}{Optional time identifier column.}
+\item{time}{Bare name of the time identifier column (optional).}
 
-\item{family}{Outcome family. See Details.}
+\item{family}{Outcome family. One of \code{"gaussian"}, \code{"binomial"},
+\code{"poisson"}, \code{"multiclass"}, \code{"fractional"}.}
 
 \item{model}{Panel architecture: \code{"pooled"}, \code{"individual"}, \code{"time"},
 \code{"twoway"}, or \code{"dynamic"}.}
 
-\item{hidden}{Hidden layer sizes passed to \code{\link[mlp:mlp]{mlp::mlp()}}.}
+\item{hidden}{Hidden layer sizes, e.g. \code{c(64, 32)}.}
 
-\item{activation}{Activation function for the hidden layers.}
+\item{activation}{Hidden-layer activation: \code{"relu"}, \code{"tanh"}, \code{"gelu"}.}
+
+\item{dropout}{Dropout rate(s); scalar or one per hidden layer.}
+
+\item{batch_norm}{Whether to apply batch normalisation after each hidden layer.}
+
+\item{residual}{Whether to add skip connections between blocks of equal width.}
+
+\item{lr_schedule}{Learning rate schedule: \code{"none"}, \code{"cosine"}, or \code{"step"}.}
 
 \item{epochs}{Number of training epochs.}
 
@@ -53,71 +67,68 @@ pannet(
 
 \item{lr}{Learning rate.}
 
-\item{optimizer}{Optimizer passed to \code{\link[mlp:mlp]{mlp::mlp()}}.}
+\item{optimizer}{\code{"adam"} or \code{"sgd"}.}
 
-\item{lags}{Integer vector of lags for dynamic models.}
+\item{lags}{Integer vector of lag orders for dynamic models.}
 
-\item{lambda_id}{L2 penalty for individual effects.}
+\item{lambda_id}{L2 penalty on individual effects.}
 
-\item{lambda_time}{L2 penalty for time effects.}
+\item{lambda_time}{L2 penalty on time effects.}
 
-\item{lambda_weights}{L2 penalty for network weights.}
+\item{lambda_weights}{L2 weight decay on MLP parameters.}
 
-\item{validation}{Validation split fraction used inside the learner.}
+\item{validation}{Fraction of units (or time points) held out for early stopping.}
 
-\item{split}{Panel-aware split rule used for the held-out performance check.}
+\item{split}{Panel-aware split rule: \code{"by_id"}, \code{"by_time"}, or \code{"random"}.}
 
-\item{standardize}{Whether to standardize numeric predictors before fitting.}
+\item{standardize}{Whether to standardise numeric predictors.}
 
 \item{seed}{Optional RNG seed.}
 
-\item{verbose}{Whether to print training progress.}
+\item{verbose}{Whether to print per-epoch progress.}
 
-\item{...}{Additional arguments forwarded to \code{\link[mlp:mlp]{mlp::mlp()}}.}
+\item{device}{\code{"auto"}, \code{"cpu"}, or \code{"cuda"}.}
+
+\item{...}{Unused.}
 }
 \value{
 An object of class \code{"pannet"}.
 }
 \description{
 \code{pannet()} estimates a neural regression model for panel or longitudinal
-data by delegating the network fit to the local \href{https://cran.r-project.org/package=mlp}{\code{mlp}}
-package after panel-aware preprocessing.
+data using a multilayer perceptron backbone augmented with additive learnable
+individual and time effects.
 }
 \details{
 The latent predictor is
 
-\code{η_it = f_θ(x_it) + a_i + γ_t + h_θ(H_it)}
+\code{eta_it = f_theta(x_it) + a_i + gamma_t}
 
-where \code{f_θ} is a multilayer perceptron, \code{a_i} is an individual effect,
-\code{γ_t} is a time effect, and \code{h_θ(H_it)} is the dynamic history component.
+where \code{a_i} and \code{gamma_t} are scalar (or class-specific for multiclass)
+learnable embeddings initialised at zero, and \code{f_theta} is a multi-layer
+perceptron. For dynamic models, lags of the outcome (continuous families)
+and covariates are appended to \code{x_it}.
 
-Outcome families in v0.1 are:
+Outcome families:
 \itemize{
-\item \code{gaussian}: \verb{y_it ~ Normal(μ_it, σ²)} with \code{μ_it = η_it}
-\item \code{binomial}: \code{y_it ~ Bernoulli(p_it)} with \code{p_it = sigmoid(η_it)}
-\item \code{poisson}: \code{y_it ~ Poisson(λ_it)} with \code{λ_it = exp(η_it)}
-\item \code{multiclass}: softmax classification
-\item \code{fractional}: response constrained to \verb{[0, 1]}
-}
-
-The loss is family-specific empirical risk:
-\itemize{
-\item Gaussian: \code{mean((y - η)^2)}
-\item Binomial: binary cross-entropy
-\item Poisson: Poisson negative log-likelihood
+\item \code{gaussian}:   MSE loss; \code{mu_it = eta_it}
+\item \code{binomial}:   BCE with logits; \code{p_it = sigmoid(eta_it)}
+\item \code{poisson}:    Poisson NLL; \code{lambda_it = exp(eta_it)}
+\item \code{multiclass}: categorical CE; \code{p_itk = softmax(eta_itk)}
+\item \code{fractional}: quasi-binomial BCE; \code{mu_it = sigmoid(eta_it)}
 }
 }
 \examples{
 set.seed(1)
 df <- data.frame(
-  id = rep(1:5, each = 4),
+  id   = rep(1:5, each = 4),
   time = rep(1:4, times = 5),
-  x1 = rnorm(20),
-  x2 = runif(20),
-  y = rnorm(20)
+  x1   = rnorm(20),
+  x2   = runif(20),
+  y    = rnorm(20)
 )
 fit <- pannet(y ~ x1 + x2, data = df, id = id, time = time,
-  family = "gaussian", model = "pooled", epochs = 1, verbose = FALSE)
+  family = "gaussian", model = "pooled", epochs = 5, verbose = FALSE)
 predict(fit, df)[1:3]
 
 }
