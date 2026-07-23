@@ -17,6 +17,12 @@ delegation).
 * `pannet_benchmark()` now includes `panglm`'s FE/RE estimators (gaussian,
   poisson) alongside `plm`/`pglm`, in addition to the pannet configuration
   grid.
+* `pannet_forecast()`: genuine recursive multi-step-ahead forecasting for
+  `model = "dynamic"` fits. `predict()` only ever supported one-step-ahead
+  prediction (it needs the *true* lagged outcome, which stops existing more
+  than one period past training); this iterates forward, feeding each
+  step's own forecast back in as the next step's lag input -- the standard
+  scheme for autoregressive forecasting.
 
 ## Bug fixes
 
@@ -27,6 +33,18 @@ delegation).
 * `predict()` on held-out (never-seen-during-training) units returned `NA`
   for a substantial fraction of them even under the default `"zero"`
   new-id strategy -- fixed via a proper sentinel embedding row.
+* **`predict()` on `model = "dynamic"` fits silently used zero instead of
+  the true lagged outcome/covariates for any newly-supplied time period.**
+  Two compounding bugs: (1) `model.matrix()`'s default `na.action` (`na.omit`)
+  silently dropped any row with an `NA` lag value -- which every row of
+  newly-added data has before its lag is computed -- corrupting the
+  row-count alignment `predict.pannet()` relies on; (2) the lag-rebuild
+  step was skipped whenever the lag *column names* were already present
+  (inherited via `rbind()` with training data), even though their *values*
+  were still `NA` placeholders for the new rows. Net effect: one-step-ahead
+  dynamic predictions were computed from a zeroed-out history rather than
+  the real one. Both are fixed; `predict()` and `pannet_forecast()` now
+  agree exactly on one-step-ahead forecasts (see `test-forecast.R`).
 
 ## Validation findings (see `vignette("pannet-validation")`)
 
