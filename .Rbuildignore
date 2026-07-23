@@ -1,0 +1,10 @@
+^refs$
+^paper$
+^FREEZE SPECIFICATION\.md$
+^pannet-formal-specification\.md$
+^pannet-SPECS\.md$
+^EctJ_Style_Instructions_Template260505\.zip$
+^.*\.Rproj$
+^\.Rproj\.user$
+^pannet\.Rcheck$
+^pannet_.*\.tar\.gz$
