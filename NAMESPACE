@@ -1,6 +1,7 @@
 export(pannet)
 export(pannet_simulate)
 export(pannet_benchmark)
+export(pannet_forecast)
 export(individual_effects)
 export(time_effects)
 export(marginal_effects)
