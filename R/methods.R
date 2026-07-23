@@ -100,9 +100,25 @@ predict.pannet <- function(
     time_idx <- if (object$panel$use_time) design$time_idx else NULL
     .pannet_update_sentinels(object$network, new_id_strategy,
                               object$panel$n_id, object$panel$n_time)
-    eta <- pannet_forward(object$network, design$x, id_idx, time_idx, object$device)
+    eta <- pannet_forward(object$network, design$x, id_idx, time_idx, object$device,
+                           offset = design$offset / object$spec$y_scale)
     return(pannet_eta_to_response(eta, object$family, object$spec$y_center,
                                    object$spec$y_scale, type, object$levels))
+  }
+
+  # Check offset variable(s) are present *before* the NA-padding below,
+  # which would otherwise silently create an NA-filled offset column and
+  # surface as a confusing low-level tensor-shape error much later.
+  if (isTRUE(object$spec$has_offset)) {
+    off_idx <- attr(terms(object$spec$design_formula), "offset")
+    off_vars <- unique(unlist(lapply(off_idx, function(i) {
+      all.vars(attr(terms(object$spec$design_formula), "variables")[[i + 1L]])
+    })))
+    missing_vars <- setdiff(off_vars, names(newdata))
+    if (length(missing_vars)) {
+      stop("This model was fit with an offset() term; `newdata` is missing ",
+           "the offset variable(s): ", paste(missing_vars, collapse = ", "), ".", call. = FALSE)
+    }
   }
 
   # Align newdata with training data structure
@@ -145,7 +161,8 @@ predict.pannet <- function(
   .pannet_update_sentinels(object$network, new_id_strategy,
                             object$panel$n_id, object$panel$n_time)
 
-  eta <- pannet_forward(object$network, design$x, id_idx, time_idx, object$device)
+  eta <- pannet_forward(object$network, design$x, id_idx, time_idx, object$device,
+                         offset = design$offset / object$spec$y_scale)
   pred_full <- pannet_eta_to_response(eta, object$family, object$spec$y_center,
                                        object$spec$y_scale, type, object$levels)
 
