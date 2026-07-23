@@ -21,7 +21,12 @@
 #' - `multiclass`: categorical CE; `p_itk = softmax(eta_itk)`
 #' - `fractional`: quasi-binomial BCE; `mu_it = sigmoid(eta_it)`
 #'
-#' @param formula A model formula such as `y ~ x1 + x2`.
+#' @param formula A model formula such as `y ~ x1 + x2`. May include an
+#'   `offset()` term (e.g. `y ~ x1 + offset(log(exposure))`), added to the
+#'   linear predictor after the MLP+embeddings, the standard `glm()`
+#'   convention. Not supported with `family = "multiclass"`. `newdata`
+#'   passed to `predict()` must supply the same offset variable(s) if the
+#'   model was fit with one.
 #' @param data A data frame containing the panel.
 #' @param id Bare name of the unit identifier column.
 #' @param time Bare name of the time identifier column (optional).
@@ -117,6 +122,10 @@ pannet <- function(
     stop("`time` column not found in `data`.", call. = FALSE)
 
   if (!is.null(seed)) set.seed(seed)
+  if (family == "multiclass" && !is.null(attr(terms(formula), "offset"))) {
+    stop("offset() is not supported with family = 'multiclass' (a scalar offset ",
+         "can't broadcast across a per-class linear predictor).", call. = FALSE)
+  }
 
   idx_result <- panel_add_index_columns(
     panel_panel_order(data, id_name, time_name), id_name, time_name
@@ -184,11 +193,16 @@ pannet <- function(
     valid_idx    = valid_idx,
     verbose      = verbose,
     device       = device,
-    seed         = seed
+    seed         = seed,
+    # divided by y_scale: for gaussian, y (hence eta) is trained on a
+    # standardized scale, so a raw-scale offset needs the same rescaling
+    # to land correctly; for other families y_scale == 1, a no-op.
+    offset       = design_full$offset / spec$y_scale
   )
 
   # Fitted values (full training data)
-  eta_fit <- pannet_forward(result$model, x_full, id_idx_full, time_idx_full, device)
+  eta_fit <- pannet_forward(result$model, x_full, id_idx_full, time_idx_full, device,
+                             offset = design_full$offset / spec$y_scale)
   fitted_vals <- pannet_eta_to_response(
     eta_fit, family, spec$y_center, spec$y_scale, "response", spec$levels
   )
