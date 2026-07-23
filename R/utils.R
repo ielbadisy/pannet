@@ -1,41 +1,33 @@
-panel_resolve_name <- function(x) {
-  expr <- substitute(x)
-  if (is.symbol(expr)) {
-    return(deparse(expr))
-  }
-  if (is.character(expr)) {
-    return(expr[[1L]])
-  }
-  stop("`id` and `time` must be column references or single strings.", call. = FALSE)
+#' Resolve a column-name argument passed as a bare symbol or a string
+#'
+#' Takes the *already-quoted* expression for `id`/`time` (typically
+#' `match.call()$id`, captured in the caller's own frame) rather than
+#' `substitute()`-ing its own parameter -- `substitute()` only unwraps one
+#' level of promise, so calling it here on a forwarded argument would just
+#' return this function's own parameter name, not the original expression
+#' the user wrote at the `pannet()` call site.
+#'
+#' @keywords internal
+#' @noRd
+panel_resolve_name <- function(expr) {
+  if (is.symbol(expr)) return(deparse(expr))
+  if (is.character(expr)) return(expr[[1L]])
+  stop("`id` and `time` must be bare column names or single strings.", call. = FALSE)
 }
 
-panel_assert_family <- function(family) {
-  family <- match.arg(family, c("gaussian", "binomial", "poisson", "multiclass", "fractional"))
-  family
-}
-
-panel_assert_model <- function(model) {
-  model <- match.arg(model, c("pooled", "individual", "time", "twoway", "dynamic"))
-  model
-}
-
-panel_assert_split <- function(split) {
-  match.arg(split, c("by_id", "by_time", "random"))
-}
+panel_assert_family <- function(f) match.arg(f, c("gaussian","binomial","poisson","multiclass","fractional"))
+panel_assert_model  <- function(m) match.arg(m, c("pooled","individual","time","twoway","dynamic"))
+panel_assert_split  <- function(s) match.arg(s, c("by_id","by_time","random"))
 
 panel_binary_to_numeric <- function(y) {
-  if (is.factor(y)) {
-    as.integer(y == levels(y)[nlevels(y)])
-  } else {
-    as.numeric(y)
-  }
+  if (is.factor(y)) as.integer(y == levels(y)[nlevels(y)]) else as.numeric(y)
 }
 
 panel_panel_order <- function(data, id_name, time_name = NULL) {
-  if (is.null(time_name)) {
-    ord <- order(data[[id_name]], seq_len(nrow(data)))
+  ord <- if (is.null(time_name)) {
+    order(data[[id_name]], seq_len(nrow(data)))
   } else {
-    ord <- order(data[[id_name]], data[[time_name]], seq_len(nrow(data)))
+    order(data[[id_name]], data[[time_name]], seq_len(nrow(data)))
   }
   data[ord, , drop = FALSE]
 }
@@ -48,309 +40,270 @@ panel_add_index_columns <- function(data, id_name, time_name = NULL) {
     data[[".pannet_time"]] <- factor(seq_len(nrow(data)))
     time_name <- ".pannet_time"
   }
-  list(data = data, id_name = id_name, time_name = time_name)
+  list(data = data, time_name = time_name)
 }
 
 panel_make_lags <- function(data, id_name, time_name, vars, lags) {
-  if (is.null(lags) || length(lags) == 0L || length(vars) == 0L) {
-    return(list(data = data, lag_cols = character()))
-  }
-  lags <- sort(unique(as.integer(lags)))
+  if (!length(lags) || !length(vars)) return(list(data = data, lag_cols = character()))
+  lags     <- sort(unique(as.integer(lags)))
   lag_cols <- character()
-  groups <- split(seq_len(nrow(data)), data[[id_name]])
+  groups   <- split(seq_len(nrow(data)), data[[id_name]])
   for (var in vars) {
-    if (!is.numeric(data[[var]])) {
-      next
-    }
+    if (!is.numeric(data[[var]])) next
     for (lag in lags) {
       out <- rep(NA_real_, nrow(data))
       for (idx in groups) {
-        if (length(idx) <= lag) {
-          next
-        }
-        out[idx[(lag + 1L):length(idx)]] <- data[[var]][idx[seq_len(length(idx) - lag)]]
+        n_i <- length(idx)
+        if (n_i > lag) out[idx[(lag + 1L):n_i]] <- data[[var]][idx[seq_len(n_i - lag)]]
       }
       nm <- paste0("lag", lag, "_", var)
       data[[nm]] <- out
-      lag_cols <- c(lag_cols, nm)
+      lag_cols   <- c(lag_cols, nm)
     }
   }
   list(data = data, lag_cols = lag_cols)
 }
 
 panel_rebuild_lags <- function(data, id_name, time_name, lag_columns) {
-  if (!length(lag_columns)) {
-    return(data)
-  }
-  lag_info <- regexec("^lag([0-9]+)_(.+)$", lag_columns)
-  lag_parts <- regmatches(lag_columns, lag_info)
-  lag_parts <- lag_parts[lengths(lag_parts) > 0L]
-  if (!length(lag_parts)) {
-    return(data)
-  }
-  vars <- unique(vapply(lag_parts, `[[`, character(1), 3L))
-  lags <- unique(as.integer(vapply(lag_parts, `[[`, character(1), 2L)))
+  if (!length(lag_columns)) return(data)
+  m     <- regexec("^lag([0-9]+)_(.+)$", lag_columns)
+  parts <- regmatches(lag_columns, m)
+  parts <- parts[lengths(parts) > 0L]
+  if (!length(parts)) return(data)
+  vars <- unique(vapply(parts, `[[`, character(1L), 3L))
+  lags <- unique(as.integer(vapply(parts, `[[`, character(1L), 2L)))
   data <- panel_panel_order(data, id_name, time_name)
-  rebuilt <- panel_make_lags(data, id_name, time_name, vars = vars, lags = lags)
-  rebuilt$data
+  panel_make_lags(data, id_name, time_name, vars = vars, lags = lags)$data
 }
 
 panel_split_indices <- function(data, id_name, time_name, split, validation) {
   n <- nrow(data)
-  if (is.null(validation) || validation <= 0) {
-    return(list(train = seq_len(n), valid = integer()))
-  }
+  if (is.null(validation) || validation <= 0) return(list(train = seq_len(n), valid = integer()))
   validation <- max(0, min(0.9, validation))
   if (split == "random") {
     valid <- sort(sample.int(n, size = max(1L, floor(n * validation))))
-    train <- setdiff(seq_len(n), valid)
-    return(list(train = train, valid = valid))
+    return(list(train = setdiff(seq_len(n), valid), valid = valid))
   }
   if (split == "by_id") {
-    ids <- unique(data[[id_name]])
+    ids       <- unique(data[[id_name]])
     valid_ids <- sample(ids, size = max(1L, floor(length(ids) * validation)))
-    valid <- which(data[[id_name]] %in% valid_ids)
-    train <- setdiff(seq_len(n), valid)
-    return(list(train = train, valid = valid))
+    valid     <- which(data[[id_name]] %in% valid_ids)
+    return(list(train = setdiff(seq_len(n), valid), valid = valid))
   }
-  times <- unique(data[[time_name]])
+  times       <- unique(data[[time_name]])
   valid_times <- sample(times, size = max(1L, floor(length(times) * validation)))
-  valid <- which(data[[time_name]] %in% valid_times)
-  train <- setdiff(seq_len(n), valid)
-  list(train = train, valid = valid)
+  valid       <- which(data[[time_name]] %in% valid_times)
+  list(train = setdiff(seq_len(n), valid), valid = valid)
 }
 
-panel_transform_response <- function(y, family) {
-  switch(
-    family,
-    gaussian = as.numeric(y),
-    binomial = {
-      if (is.factor(y)) {
-        if (nlevels(y) != 2L) stop("binomial response must have exactly two levels.", call. = FALSE)
-        factor(y)
-      } else {
-        y_num <- as.integer(as.numeric(y))
-        if (!all(y_num %in% c(0L, 1L), na.rm = TRUE)) {
-          stop("binomial response must be coded as 0/1 or a two-level factor.", call. = FALSE)
-        }
-        factor(y_num, levels = c(0L, 1L))
-      }
-    },
-    poisson = log1p(as.numeric(y)),
-    multiclass = factor(y),
-    fractional = {
-      y <- as.numeric(y)
-      if (any(y < 0 | y > 1, na.rm = TRUE)) {
-        stop("fractional response must be in [0, 1].", call. = FALSE)
-      }
-      qlogis(pmin(pmax(y, 1e-6), 1 - 1e-6))
-    }
-  )
-}
+# -------------------------------------------------------------------
+# Preprocessing spec
+# -------------------------------------------------------------------
 
-panel_inverse_response <- function(yhat, family, positive_level = "1") {
-  switch(
-    family,
-    gaussian = yhat,
-    binomial = yhat,
-    poisson = expm1(yhat),
-    multiclass = yhat,
-    fractional = plogis(yhat)
-  )
-}
-
-panel_metric_name <- function(family) {
-  switch(family,
-    gaussian = "rmse",
-    binomial = "accuracy",
-    poisson = "rmse",
-    multiclass = "accuracy",
-    fractional = "rmse"
-  )
-}
-
-panel_build_design <- function(data, spec, training = FALSE, new_id_strategy = c("zero", "mean", "error")) {
-  new_id_strategy <- match.arg(new_id_strategy)
-  required <- unique(c(spec$design_vars, spec$factor_columns, spec$id_name, spec$time_name))
-  required <- required[required %in% names(data)]
-  data <- data[, required, drop = FALSE]
-
-  for (nm in spec$factor_columns) {
-    levs <- spec$factor_levels[[nm]]
-    if (!nm %in% names(data)) {
-      next
-    }
-    data[[nm]] <- factor(as.character(data[[nm]]), levels = levs)
-  }
-  if (new_id_strategy == "error" && any(vapply(spec$factor_columns, function(nm) nm %in% names(data) && anyNA(data[[nm]]), logical(1)))) {
-    stop("New data contains unseen factor levels and `new_id_strategy = \"error\"`.", call. = FALSE)
-  }
-  for (nm in spec$numeric_columns) {
-    if (nm %in% names(data)) {
-      data[[nm]] <- as.numeric(data[[nm]])
-    }
-  }
-
-  if (length(spec$lag_columns) && !all(spec$lag_columns %in% names(data))) {
-    data <- panel_rebuild_lags(data, spec$id_name, spec$time_name, spec$lag_columns)
-  }
-
-  if (length(spec$lag_columns)) {
-    for (nm in spec$lag_columns) {
-      data[[nm]] <- as.numeric(data[[nm]])
-    }
-  }
-
-  if (length(spec$center_columns)) {
-    for (nm in spec$center_columns) {
-      if (nm %in% names(data)) {
-        center <- spec$center[[nm]]
-        scale <- spec$scale[[nm]]
-        data[[nm]] <- (as.numeric(data[[nm]]) - center) / scale
-      }
-    }
-  }
-
-  mm_terms <- delete.response(terms(spec$design_formula))
-  mm <- model.matrix(mm_terms, data = data)
-  if ("(Intercept)" %in% colnames(mm)) {
-    mm <- mm[, colnames(mm) != "(Intercept)", drop = FALSE]
-  }
-  if (anyNA(mm)) {
-    if (new_id_strategy == "mean") {
-      for (nm in colnames(mm)) {
-        idx <- is.na(mm[, nm])
-        if (any(idx)) {
-          mm[idx, nm] <- spec$column_means[[nm]]
-        }
-      }
-    } else {
-      mm[is.na(mm)] <- 0
-    }
-  }
-  mm
-}
-
-panel_prepare_spec <- function(formula, data, id_name, time_name, model, family, lags, standardize) {
+panel_prepare_spec <- function(formula, data, id_name, time_name, model,
+                                family, lags, standardize) {
+  # Panel index encoding
   id_levels <- sort(unique(as.character(data[[id_name]])))
   data[[id_name]] <- factor(as.character(data[[id_name]]), levels = id_levels)
-  factor_levels <- list()
-  factor_columns <- character()
-  numeric_columns <- character()
-
+  time_levels <- character()
   if (!is.null(time_name)) {
     time_levels <- sort(unique(as.character(data[[time_name]])))
     data[[time_name]] <- factor(as.character(data[[time_name]]), levels = time_levels)
-  } else {
-    time_levels <- character()
   }
 
-  extra_terms <- character()
-  if (model %in% c("individual", "twoway")) {
-    extra_terms <- c(extra_terms, id_name)
-    factor_levels[[id_name]] <- levels(data[[id_name]])
-    factor_columns <- c(factor_columns, id_name)
-  }
-  if (model %in% c("time", "twoway")) {
-    if (is.null(time_name)) {
-      stop("`time` is required for `model = \"time\"` or `model = \"twoway\"`.", call. = FALSE)
-    }
-    extra_terms <- c(extra_terms, time_name)
-    factor_levels[[time_name]] <- levels(data[[time_name]])
-    factor_columns <- c(factor_columns, time_name)
+  use_id   <- model %in% c("individual", "twoway")
+  use_time <- model %in% c("time", "twoway") && !is.null(time_name)
+  if (model %in% c("time", "twoway") && is.null(time_name)) {
+    stop("`time` is required for model = 'time' or 'twoway'.", call. = FALSE)
   }
 
+  # Dynamic lags: include lagged y for continuous families
+  lag_cols      <- character()
+  lag_base_vars <- character()
   if (model == "dynamic" && length(lags)) {
-    lag_vars <- all.vars(delete.response(terms(formula)))
-    lag_vars <- setdiff(lag_vars, c(id_name, time_name))
-    lagged <- panel_make_lags(data, id_name, time_name, lag_vars, lags)
-    data <- lagged$data
-    extra_terms <- c(extra_terms, lagged$lag_cols)
+    pred_vars     <- setdiff(all.vars(delete.response(terms(formula))), c(id_name, time_name))
+    y_name        <- all.vars(formula[[2L]])
+    lag_base_vars <- if (family %in% c("gaussian", "poisson", "fractional")) {
+      unique(c(pred_vars, y_name))
+    } else {
+      pred_vars
+    }
+    lagged   <- panel_make_lags(data, id_name, time_name, lag_base_vars, lags)
+    data     <- lagged$data
+    lag_cols <- lagged$lag_cols
+  }
+
+  # Design formula: only covariates, NO panel effect dummy columns
+  design_formula <- if (length(lag_cols)) {
+    update(formula, paste(". ~ . +", paste(lag_cols, collapse = " + ")))
   } else {
-    lagged <- list(lag_cols = character())
+    formula
   }
 
-  base_terms <- delete.response(terms(formula))
-  if (length(extra_terms)) {
-    design_formula <- update(formula, paste(". ~ . +", paste(extra_terms, collapse = " + ")))
-  } else {
-    design_formula <- formula
-  }
+  mf  <- model.frame(design_formula, data = data, na.action = na.pass)
+  y   <- model.response(mf)
+  mm  <- model.matrix(delete.response(terms(design_formula)), data = mf)
+  if ("(Intercept)" %in% colnames(mm)) mm <- mm[, colnames(mm) != "(Intercept)", drop = FALSE]
 
-  mf <- model.frame(design_formula, data = data, na.action = na.pass)
-  y <- model.response(mf)
-  mm <- model.matrix(delete.response(terms(design_formula)), data = mf)
-  if ("(Intercept)" %in% colnames(mm)) {
-    mm <- mm[, colnames(mm) != "(Intercept)", drop = FALSE]
-  }
-
+  # Standardise numeric predictor columns
+  mm_center <- stats::setNames(rep(0, ncol(mm)), colnames(mm))
+  mm_scale  <- stats::setNames(rep(1, ncol(mm)), colnames(mm))
+  std_cols  <- character()
   if (standardize) {
-    mm_center <- rep(0, ncol(mm))
-    mm_scale <- rep(1, ncol(mm))
-    names(mm_center) <- colnames(mm)
-    names(mm_scale) <- colnames(mm)
-    standardized_cols <- character()
     for (nm in colnames(mm)) {
       col <- mm[, nm]
       if (is.numeric(col) && !all(col %in% c(0, 1), na.rm = TRUE)) {
         mm_center[nm] <- mean(col, na.rm = TRUE)
-        mm_scale[nm] <- stats::sd(col, na.rm = TRUE)
-        if (is.na(mm_scale[nm]) || mm_scale[nm] == 0) {
-          mm_scale[nm] <- 1
-        }
+        mm_scale[nm]  <- stats::sd(col, na.rm = TRUE)
+        if (!is.finite(mm_scale[nm]) || mm_scale[nm] == 0) mm_scale[nm] <- 1
         mm[, nm] <- (col - mm_center[nm]) / mm_scale[nm]
-        standardized_cols <- c(standardized_cols, nm)
+        std_cols <- c(std_cols, nm)
       }
     }
-  } else {
-    mm_center <- setNames(rep(0, ncol(mm)), colnames(mm))
-    mm_scale <- setNames(rep(1, ncol(mm)), colnames(mm))
-    standardized_cols <- character()
   }
 
-  factor_cols_in_formula <- names(Filter(is.factor, mf))
-  numeric_cols_in_formula <- names(Filter(is.numeric, mf))
-  numeric_cols_in_formula <- setdiff(numeric_cols_in_formula, c(id_name, time_name))
+  # Track factor/numeric predictor columns for new-data prediction
+  factor_cols  <- names(Filter(is.factor, mf))
+  factor_levs  <- stats::setNames(
+    lapply(factor_cols, function(nm) if (nm %in% names(mf)) levels(mf[[nm]]) else character()),
+    factor_cols
+  )
+  numeric_cols <- setdiff(names(Filter(is.numeric, mf)), c(id_name, time_name))
+
+  # Multiclass levels and output dimension
+  mc_levels  <- if (family == "multiclass") sort(unique(as.character(y))) else NULL
+  output_dim <- if (family == "multiclass") length(mc_levels) else 1L
+
+  # Encode y for training
+  yenc <- pannet_encode_y(y, family, mc_levels)
 
   spec <- list(
-    formula = formula,
-    design_formula = design_formula,
-    design_vars = all.vars(delete.response(terms(design_formula))),
-    response_name = all.vars(formula[[2L]]),
-    task = if (family %in% c("binomial", "multiclass")) "classification" else "regression",
-    family = family,
-    model = model,
-    id_name = id_name,
-    time_name = time_name,
-    id_levels = id_levels,
-    time_levels = time_levels,
-    factor_levels = factor_levels,
-    factor_columns = unique(c(factor_columns, factor_cols_in_formula)),
-    numeric_columns = numeric_cols_in_formula,
-    lag_columns = lagged$lag_cols,
-    lag_base_vars = if (exists("lag_vars", inherits = FALSE)) lag_vars else character(),
-    all_columns = names(mf),
-    center_columns = standardized_cols,
-    center = as.list(mm_center),
-    scale = as.list(mm_scale),
-    column_means = setNames(colMeans(mm, na.rm = TRUE), colnames(mm)),
-    x_names = colnames(mm),
-    x_train = mm,
-    y_raw = y,
-    y_train = panel_transform_response(y, family),
-    prepared_data = data
+    formula         = formula,
+    design_formula  = design_formula,
+    design_vars     = all.vars(delete.response(terms(design_formula))),
+    response_name   = all.vars(formula[[2L]]),
+    family          = family,
+    model           = model,
+    id_name         = id_name,
+    time_name       = time_name,
+    id_levels       = id_levels,
+    time_levels     = time_levels,
+    use_id          = use_id,
+    use_time        = use_time,
+    n_id            = if (use_id)   length(id_levels)   else 0L,
+    n_time          = if (use_time) length(time_levels) else 0L,
+    output_dim      = output_dim,
+    levels          = mc_levels,
+    factor_levels   = factor_levs,
+    factor_columns  = factor_cols,
+    numeric_columns = numeric_cols,
+    lag_columns     = lag_cols,
+    lag_base_vars   = lag_base_vars,
+    center_columns  = std_cols,
+    center          = as.list(mm_center),
+    scale           = as.list(mm_scale),
+    column_means    = stats::setNames(colMeans(mm, na.rm = TRUE), colnames(mm)),
+    x_names         = colnames(mm),
+    x_train         = mm,
+    y_raw           = y,
+    y_encoded       = yenc$y,
+    y_center        = yenc$center,
+    y_scale         = yenc$scale,
+    prepared_data   = data
   )
   class(spec) <- "pannet_spec"
   spec
 }
 
-panel_eval_loss <- function(y_true, y_pred, family) {
-  switch(
-    family,
-    gaussian = mean((y_true - y_pred)^2, na.rm = TRUE),
-    binomial = mean((panel_binary_to_numeric(y_true) - y_pred)^2, na.rm = TRUE),
-    poisson = mean((as.numeric(y_true) - y_pred)^2, na.rm = TRUE),
-    multiclass = mean(y_true != y_pred, na.rm = TRUE),
-    fractional = mean((as.numeric(y_true) - y_pred)^2, na.rm = TRUE)
-  )
+# -------------------------------------------------------------------
+# Design matrix + panel index extraction for prediction
+# -------------------------------------------------------------------
+
+# Returns list(x = matrix, id_idx = integer | NULL, time_idx = integer | NULL)
+# id_idx and time_idx are 0-based for torch nn_embedding.
+panel_build_design <- function(data, spec, new_id_strategy = c("zero", "mean", "error")) {
+  new_id_strategy <- match.arg(new_id_strategy)
+
+  # Rebuild lag columns if they are absent from data
+  if (length(spec$lag_columns) && !all(spec$lag_columns %in% names(data))) {
+    data <- panel_rebuild_lags(data, spec$id_name, spec$time_name, spec$lag_columns)
+  }
+
+  # Apply stored factor levels to formula-level factors
+  for (nm in names(spec$factor_levels)) {
+    if (nm %in% names(data)) {
+      data[[nm]] <- factor(as.character(data[[nm]]), levels = spec$factor_levels[[nm]])
+    }
+  }
+  for (nm in spec$numeric_columns) {
+    if (nm %in% names(data)) data[[nm]] <- as.numeric(data[[nm]])
+  }
+  for (nm in spec$lag_columns) {
+    if (nm %in% names(data)) data[[nm]] <- as.numeric(data[[nm]])
+  }
+
+  mm_terms <- delete.response(terms(spec$design_formula))
+  mm <- model.matrix(mm_terms, data = data)
+  if ("(Intercept)" %in% colnames(mm)) mm <- mm[, colnames(mm) != "(Intercept)", drop = FALSE]
+
+  # Apply standardisation
+  for (nm in spec$center_columns) {
+    if (nm %in% colnames(mm)) {
+      mm[, nm] <- (mm[, nm] - spec$center[[nm]]) / spec$scale[[nm]]
+    }
+  }
+
+  # Handle NAs
+  if (anyNA(mm)) {
+    if (new_id_strategy == "mean") {
+      for (nm in colnames(mm)) {
+        bad <- is.na(mm[, nm])
+        if (any(bad)) mm[bad, nm] <- spec$column_means[[nm]]
+      }
+    } else {
+      mm[is.na(mm)] <- 0
+    }
+  }
+
+  # Panel index extraction (1-based for R torch nn_embedding)
+  # Row n_id+1 (time: n_time+1) is a sentinel kept at zero (or mean) for unseen units
+  id_idx   <- NULL
+  time_idx <- NULL
+
+  if (!is.null(spec$id_name) && spec$id_name %in% names(data)) {
+    id_raw    <- as.character(data[[spec$id_name]])
+    id_mapped <- match(id_raw, spec$id_levels)   # 1-based; NA for unseen
+    unseen    <- is.na(id_mapped)
+    if (any(unseen)) {
+      if (new_id_strategy == "error") {
+        stop("New data contains IDs not seen during training and `new_id_strategy = 'error'`.", call. = FALSE)
+      }
+      # Sentinel index = n_id + 1 (zero-initialised; updated to mean by predict.pannet if requested)
+      id_mapped[unseen] <- length(spec$id_levels) + 1L
+    }
+    id_idx <- as.integer(id_mapped)
+  }
+
+  if (!is.null(spec$time_name) && spec$time_name %in% names(data)) {
+    time_raw    <- as.character(data[[spec$time_name]])
+    time_mapped <- match(time_raw, spec$time_levels)  # 1-based
+    time_mapped[is.na(time_mapped)] <- length(spec$time_levels) + 1L  # sentinel
+    time_idx <- as.integer(time_mapped)
+  }
+
+  list(x = mm, id_idx = id_idx, time_idx = time_idx)
+}
+
+.pannet_sentinel_idx <- function(n) as.integer(n) + 1L
+
+panel_mean_id_effect <- function(model, n_id) {
+  if (is.null(model$id_emb) || n_id == 0L) return(0)
+  w <- as.array(model$id_emb$weight$to(device = "cpu")$detach())
+  colMeans(w[seq_len(n_id), , drop = FALSE])
+}
+
+panel_mean_time_effect <- function(model, n_time) {
+  if (is.null(model$time_emb) || n_time == 0L) return(0)
+  w <- as.array(model$time_emb$weight$to(device = "cpu")$detach())
+  colMeans(w[seq_len(n_time), , drop = FALSE])
 }
