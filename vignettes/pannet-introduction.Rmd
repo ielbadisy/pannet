@@ -13,9 +13,24 @@ library(pannet)
 set.seed(1)
 ```
 
-`pannet` fits neural panel regression models on top of the local `mlp`
-package. The wrapper adds panel-aware preprocessing, optional individual and
-time effects, and dynamic lag features.
+`pannet` fits neural panel regression models -- a multilayer perceptron
+backbone with additive learnable individual/time effects -- trained natively
+via `torch` (no external learner dependency). The wrapper handles panel-aware
+preprocessing, `offset()` terms, and dynamic lag features.
+
+## Which extractors work with which `model`
+
+| Function | pooled | individual | time | twoway | dynamic |
+|---|---|---|---|---|---|
+| `individual_effects()` | `NULL` | yes | `NULL` | yes | `NULL` |
+| `time_effects()` | `NULL` | `NULL` | yes | yes | `NULL` |
+| `marginal_effects()` | yes | yes | yes | yes | yes |
+| `predict()` | yes | yes | yes | yes | yes (known units only for lag history) |
+
+`individual_effects()`/`time_effects()` return `NULL` (not an error) when the
+fitted model has no corresponding embedding -- e.g. `model = "dynamic"` has
+neither, since it only uses lagged history, not panel-effect embeddings.
+Check `fit$model` if unsure which applies.
 
 ## Gaussian pooled model
 
