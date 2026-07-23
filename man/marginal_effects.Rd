@@ -2,22 +2,34 @@
 % Please edit documentation in R/marginal_effects.R
 \name{marginal_effects}
 \alias{marginal_effects}
+\alias{marginal_effects.pannet}
 \title{Compute marginal effects for a pannet model}
 \usage{
 marginal_effects(object, ...)
+
+\method{marginal_effects}{pannet}(object, variable, eps = 1e-04, newdata = NULL, ...)
 }
 \arguments{
 \item{object}{A fitted model.}
 
 \item{...}{Additional arguments passed to methods.}
+
+\item{variable}{Name of the numeric covariate to perturb.}
+
+\item{eps}{Finite-difference step size.}
+
+\item{newdata}{Optional baseline data frame. When \code{NULL} the training data
+are used.}
+}
+\value{
+A data frame with columns \code{variable}, \code{marginal_effect}, and \code{scale}
+(plus \code{class} for multiclass models).
 }
 \description{
-The average marginal effect of variable \code{x_j} is approximated by finite
-differences:
+The average marginal effect of \code{x_j} is approximated by finite differences:
 }
 \details{
-\verb{AME_j ≈ mean\{ [μ(x_j + ε) - μ(x_j)] / ε \}}
+\verb{AME_j = mean\{ [mu(x_j + eps) - mu(x_j)] / eps \}} (approximately)
 
-For multiclass models, marginal effects are returned on the probability
-scale, one row per class.
+For multiclass models, one marginal effect per class is returned.
 }
