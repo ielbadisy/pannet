@@ -2,7 +2,7 @@
 % Please edit documentation in R/methods.R
 \name{training_history}
 \alias{training_history}
-\title{Extract the training history from a pannet model}
+\title{Extract training history from a pannet model}
 \usage{
 training_history(object, ...)
 }
@@ -12,8 +12,8 @@ training_history(object, ...)
 \item{...}{Unused.}
 }
 \value{
-A list containing loss curves and training metadata.
+A list with loss curves and metadata.
 }
 \description{
-Extract the training history from a pannet model
+Extract training history from a pannet model
 }
