@@ -15,34 +15,20 @@
 \arguments{
 \item{object}{A \code{"pannet"} object.}
 
-\item{newdata}{Optional data frame for prediction.}
+\item{newdata}{Optional data frame for prediction. When \code{NULL} returns
+training-set fitted values.}
 
-\item{type}{Prediction scale.}
+\item{type}{Prediction scale: \code{"response"}, \code{"link"}, \code{"prob"}, or \code{"class"}.}
 
-\item{new_id_strategy}{Strategy for unseen unit identifiers.}
+\item{new_id_strategy}{How to handle IDs not seen during training:
+\code{"zero"} (set effect to 0), \code{"mean"} (use mean learned effect), or
+\code{"error"} (stop with an error).}
 
 \item{...}{Unused.}
 }
 \value{
-A numeric vector, factor, or probability matrix depending on \code{type}
-and the model family.
+Numeric vector, factor, or probability matrix depending on \code{type}.
 }
 \description{
-The prediction scales are:
-}
-\details{
-\itemize{
-\item \code{type = "link"}: latent predictor \code{η}
-\item \code{type = "response"}: family-specific response scale
-\item \code{type = "prob"}: probability matrix for classification models
-\item \code{type = "class"}: predicted class labels for multiclass models
-}
-
-For unseen panel units, \code{new_id_strategy} controls how the unit effect is
-handled:
-\itemize{
-\item \code{"zero"}: set the new effect to 0
-\item \code{"mean"}: use the mean learned effect
-\item \code{"error"}: stop with an error
-}
+Predict from a fitted pannet model
 }
