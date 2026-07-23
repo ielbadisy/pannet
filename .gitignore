@@ -1,0 +1,13 @@
+*.o
+*.so
+*.dll
+pannet.Rcheck/
+pannet_*.tar.gz
+paper/
+EctJ_Style_Instructions_Template260505.zip
+.Rproj.user/
+.Rhistory
+.RData
+/doc/
+/Meta/
+.claude/
