@@ -1,7 +1,18 @@
-# pannet 0.1.0
+# pannet 0.7.0
 
-Initial release. Native `torch` backend (replacing the earlier `mlp`-package
-delegation).
+## Dynamic panel bias
+
+* `pannet_debias()`: split-panel jackknife bias correction (Dhaene &
+  Jochmans, 2015) for `model = "dynamic"` fits. Any lagged-dependent-
+  variable panel estimator is inconsistent at finite T (Nickell, 1981);
+  since `pannet` is a neural architecture, no closed-form LSDV-style
+  correction applies, so this fits the full panel and two time-split
+  half-panels separately and corrects the average marginal effect of each
+  covariate as `2*full - 0.5*(half1 + half2)`. A model-agnostic outer
+  wrapper around three ordinary `pannet()` calls; it does not change the
+  training loop.
+
+# pannet 0.6.0
 
 ## Validation
 
@@ -16,32 +27,10 @@ delegation).
   `tests/testthat/test-nonlinear-recovery.R` is a permanent regression
   guard on the `panglm` comparison.
 
-## Dynamic panel bias
-
-* `pannet_debias()`: split-panel jackknife bias correction (Dhaene &
-  Jochmans, 2015) for `model = "dynamic"` fits. Any lagged-dependent-
-  variable panel estimator is inconsistent at finite T (Nickell, 1981);
-  since `pannet` is a neural architecture, no closed-form LSDV-style
-  correction applies, so this fits the full panel and two time-split
-  half-panels separately and corrects the average marginal effect of each
-  covariate as `2*full - 0.5*(half1 + half2)`. A model-agnostic outer
-  wrapper around three ordinary `pannet()` calls; it does not change the
-  training loop.
+# pannet 0.5.0
 
 ## Features
 
-* MLP backbone with additive learnable individual/time embeddings; `model =
-  "pooled"`, `"individual"`, `"time"`, `"twoway"`, `"dynamic"`.
-* Families: gaussian, binomial, poisson, multiclass, fractional.
-* `offset()` support in the formula (e.g. `y ~ x1 + offset(log(exposure))`),
-  added to the linear predictor after the MLP+embeddings, the standard
-  `glm()` convention. Correctly rescaled for gaussian (where `y` is
-  standardized before training). Not supported with `family = "multiclass"`.
-  `predict()` requires `newdata` to supply the same offset variable(s) if
-  the model was fit with one.
-* `pannet_benchmark()` now includes `panglm`'s FE/RE estimators (gaussian,
-  poisson) alongside `plm`/`pglm`, in addition to the pannet configuration
-  grid.
 * `pannet_forecast()`: genuine recursive multi-step-ahead forecasting for
   `model = "dynamic"` fits. `predict()` only ever supported one-step-ahead
   prediction (it needs the *true* lagged outcome, which stops existing more
@@ -70,6 +59,45 @@ delegation).
   dynamic predictions were computed from a zeroed-out history rather than
   the real one. Both are fixed; `predict()` and `pannet_forecast()` now
   agree exactly on one-step-ahead forecasts (see `test-forecast.R`).
+
+# pannet 0.4.0
+
+## Features
+
+* `offset()` support in the formula (e.g. `y ~ x1 + offset(log(exposure))`),
+  added to the linear predictor after the MLP+embeddings, the standard
+  `glm()` convention. Correctly rescaled for gaussian (where `y` is
+  standardized before training). Not supported with `family = "multiclass"`.
+  `predict()` requires `newdata` to supply the same offset variable(s) if
+  the model was fit with one.
+
+# pannet 0.3.0
+
+## Features
+
+* `pannet_benchmark()`: compares `pannet` configurations against classical
+  panel estimators (`plm`, `pglm`), later extended to include `panglm`'s
+  FE/RE estimators (gaussian, poisson) as well.
+* `marginal_effects()`/`individual_effects()`/`time_effects()`: average
+  marginal effects via finite differences over the empirical covariate
+  distribution, and extraction of the additive individual/time embedding
+  terms.
+
+# pannet 0.2.0
+
+Native `torch` backend, replacing the earlier `mlp`-package delegation.
+
+## Features
+
+* MLP backbone with additive learnable individual/time embeddings; `model =
+  "pooled"`, `"individual"`, `"time"`, `"twoway"`, `"dynamic"`.
+* Families: gaussian, binomial, poisson, multiclass, fractional.
+* `print()`/`summary()`/`predict()`/`fitted()` methods for the torch
+  backend.
+
+# pannet 0.1.0
+
+Initial package scaffold.
 
 ## Validation findings (see `vignette("pannet-validation")`)
 
@@ -103,9 +131,9 @@ confirmation that the package runs:
 
 ## Known limitations
 
-* No bias correction for dynamic-panel (lagged-dependent-variable) models.
+* No bias correction for dynamic-panel (lagged-dependent-variable) models
+  before `pannet_debias()` (0.7.0).
 * Individual/time fixed effects are jointly estimated (dummy/embedding
   style), not profiled out in closed form -- see the sparse-count finding
   above.
-* Not yet on CRAN (`panglm` and `glmmTMB` comparisons in tests/vignettes are
-  Suggests-gated).
+* Not yet on CRAN.

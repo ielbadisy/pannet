@@ -8,3 +8,8 @@
 ^\.Rproj\.user$
 ^pannet\.Rcheck$
 ^pannet_.*\.tar\.gz$
+^\.git$
+^\.github$
+^\.claude$
+^README\.Rmd$
+^cran-comments\.md$

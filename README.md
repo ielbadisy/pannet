@@ -1,6 +1,11 @@
 
 # pannet
 
+<!-- badges: start -->
+[![R-CMD-check](https://github.com/ielbadisy/pannet/actions/workflows/R-CMD-check.yaml/badge.svg)](https://github.com/ielbadisy/pannet/actions/workflows/R-CMD-check.yaml)
+[![License: GPL-3](https://img.shields.io/badge/License-GPL--3-yellow.svg)](https://www.gnu.org/licenses/gpl-3.0)
+<!-- badges: end -->
+
 Neural regression for panel data: for when the covariate-response
 relationship is genuinely nonlinear. Classical panel estimators (`plm`,
 `pglm`, [`panglm`](https://github.com/ielbadisy/panglm)) are fast and

@@ -1,7 +1,7 @@
 Package: pannet
 Type: Package
 Title: Neural Regression for Panel Data with Nonlinear Covariate Effects
-Version: 0.1.0
+Version: 0.7.0
 Authors@R: person(given = "Imad", family = "EL BADISY", role = c("aut", "cre"),
     email = "elbadisyimad@gmail.com")
 Description: Fits panel and longitudinal regression models with a multilayer
@@ -22,7 +22,6 @@ License: GPL-3
 URL: https://github.com/ielbadisy/pannet
 BugReports: https://github.com/ielbadisy/pannet/issues
 Encoding: UTF-8
-LazyData: true
 Imports:
     torch,
     stats,
