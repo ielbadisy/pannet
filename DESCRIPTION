@@ -16,7 +16,7 @@ Description: Fits panel and longitudinal regression models with a multilayer
     advance (see the package vignettes). Supports Gaussian, binomial, Poisson,
     multiclass, and fractional outcomes, with pooled, individual-effect,
     time-effect, two-way-effect, and dynamic (lagged) panel structures.
-    Training is performed natively via the torch package with no external
+    Training is performed natively via the 'torch' package with no external
     learner dependency.
 License: GPL-3
 URL: https://github.com/ielbadisy/pannet
